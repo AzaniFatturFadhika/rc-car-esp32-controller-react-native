@@ -13,12 +13,12 @@ import * as Haptics from "expo-haptics";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import * as ScreenOrientation from "expo-screen-orientation";
 import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useReducer,
-  useRef,
-  useState,
+    useCallback,
+    useEffect,
+    useMemo,
+    useReducer,
+    useRef,
+    useState,
 } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -26,27 +26,28 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ConnectionStatusBar } from "@/features/gamepad/connection-status-bar";
 import {
-  AnalogStick,
-  buttonIsActive,
-  DigitalButton,
-  DPad,
-  getActionVariant,
+    AnalogStick,
+    buttonIsActive,
+    DigitalButton,
+    DPad,
+    getActionVariant,
+    useDualStickGestures
 } from "@/features/gamepad/gamepad-controls";
 import {
-  encodeGamepadPayload,
-  serializeGamepadPayload,
+    encodeGamepadPayload,
+    serializeGamepadPayload,
 } from "@/features/gamepad/protocol";
 import { SettingsSheet } from "@/features/gamepad/settings-sheet";
 import { loadConnectionSettings } from "@/features/gamepad/settings-storage";
 import type {
-  ButtonId,
-  ConnectionSettings,
-  DPadDirection,
-  GamepadState,
+    ButtonId,
+    ConnectionSettings,
+    DPadDirection,
+    GamepadState,
 } from "@/features/gamepad/types";
 import {
-  DEFAULT_CONNECTION_SETTINGS,
-  EMPTY_GAMEPAD_STATE,
+    DEFAULT_CONNECTION_SETTINGS,
+    EMPTY_GAMEPAD_STATE,
 } from "@/features/gamepad/types";
 import { useWifiTransport } from "@/features/gamepad/use-wifi-transport";
 
@@ -101,6 +102,9 @@ export default function GamepadScreen() {
   const [showPayload, setShowPayload] = useState(true);
   const [connectionSettings, setConnectionSettings] =
     useState<ConnectionSettings>(DEFAULT_CONNECTION_SETTINGS);
+
+  // Two linked pan gestures for simultaneous dual-stick multi-touch on Android.
+  const stickGestures = useDualStickGestures();
 
   // Session timer
   const [sessionSeconds, setSessionSeconds] = useState(0);
@@ -400,7 +404,7 @@ export default function GamepadScreen() {
             </View>
           </View>
         </SafeAreaView>
-      </View>
+    </View>
 
       <SettingsSheet
         visible={settingsVisible}

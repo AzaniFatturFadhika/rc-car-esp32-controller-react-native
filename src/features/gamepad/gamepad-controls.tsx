@@ -1,5 +1,12 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { PanResponder, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import {
+    Gesture,
+    GestureDetector,
+    type PanGesture,
+} from "react-native-gesture-handler";
+import { useSharedValue } from "react-native-reanimated";
+import { scheduleOnRN } from "react-native-worklets";
 
 import type { ActionButtonId, ButtonId, DPadDirection } from "./types";
 
@@ -8,6 +15,8 @@ type AnalogStickProps = {
   size: number;
   knobSize: number;
   deadzone?: number;
+  /** Pre-built pan gesture with simultaneous multi-touch already configured. */
+  gesture: PanGesture;
   onMove: (x: number, y: number) => void;
   onRelease: () => void;
 };
@@ -57,50 +66,32 @@ export const AnalogStick = memo(function AnalogStick({
   size,
   knobSize,
   deadzone = DEADZONE,
+  gesture,
   onMove,
   onRelease,
 }: AnalogStickProps) {
   const radius = (size - knobSize) / 2;
   const [knobOffset, setKnobOffset] = useState({ x: 0, y: 0 });
   const lastAxisRef = useRef({ x: 0, y: 0 });
-  const onMoveRef = useRef(onMove);
-  const onReleaseRef = useRef(onRelease);
 
-  // Sync callback refs in effect (not during render) for React Compiler compat.
+  const onMoveShared = useSharedValue(onMove);
+  const onReleaseShared = useSharedValue(onRelease);
+
   useEffect(() => {
-    onMoveRef.current = onMove;
-    onReleaseRef.current = onRelease;
-  });
+    onMoveShared.value = onMove;
+    onReleaseShared.value = onRelease;
+  }, [onMove, onRelease]);
 
-  const dynamicStyles = useMemo(
-    () => ({
-      track: {
-        width: size,
-        height: size,
-        borderRadius: size / 2,
-      },
-      knob: {
-        width: knobSize,
-        height: knobSize,
-        borderRadius: knobSize / 2,
-        transform: [{ translateX: knobOffset.x }, { translateY: knobOffset.y }],
-      },
-    }),
-    [knobOffset.x, knobOffset.y, knobSize, size]
-  );
-
-  // PanResponder created once via useState lazy init. Gesture handlers read refs
-  // only inside event callbacks (not during render), which is safe.
-  // panHandlers is a plain object in state — no ref access needed in JSX.
-  // eslint-disable-next-line react-hooks/refs -- PanResponder callbacks are gesture handlers, not render code
-  const [panHandlers] = useState(() =>
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderMove: (_, gesture) => {
-        const distance = Math.hypot(gesture.dx, gesture.dy);
+  // Rebind gesture callbacks whenever move/release or size changes.
+  // The gesture identity stays stable (same object reference) so
+  // GestureDetector does not remount, but RNGH reads the latest
+  // shared values on every event.
+  useEffect(() => {
+    gesture
+      .onUpdate((e) => {
+        const distance = Math.hypot(e.translationX, e.translationY);
         const limitedDistance = Math.min(distance, radius);
-        const angle = Math.atan2(gesture.dy, gesture.dx);
+        const angle = Math.atan2(e.translationY, e.translationX);
         const nextOffset = {
           x: Math.cos(angle) * limitedDistance,
           y: Math.sin(angle) * limitedDistance,
@@ -117,38 +108,85 @@ export const AnalogStick = memo(function AnalogStick({
           Math.abs(nextAxis.y - lastAxisRef.current.y) >= deadzone
         ) {
           lastAxisRef.current = nextAxis;
-          onMoveRef.current(nextAxis.x, nextAxis.y);
+          scheduleOnRN(onMoveShared.value, nextAxis.x, nextAxis.y);
         }
-      },
-      onPanResponderRelease: () => {
+      })
+      .onEnd(() => {
         lastAxisRef.current = { x: 0, y: 0 };
         setKnobOffset({ x: 0, y: 0 });
-        onReleaseRef.current();
-      },
-      onPanResponderTerminate: () => {
+        scheduleOnRN(onReleaseShared.value);
+      })
+      .onFinalize(() => {
         lastAxisRef.current = { x: 0, y: 0 };
         setKnobOffset({ x: 0, y: 0 });
-        onReleaseRef.current();
+        scheduleOnRN(onReleaseShared.value);
+      });
+  }, [gesture, radius, deadzone, onMoveShared, onReleaseShared]);
+
+  const dynamicStyles = useMemo(
+    () => ({
+      track: { width: size, height: size, borderRadius: size / 2 },
+      knob: {
+        width: knobSize,
+        height: knobSize,
+        borderRadius: knobSize / 2,
+        transform: [{ translateX: knobOffset.x }, { translateY: knobOffset.y }],
       },
-    }).panHandlers
+    }),
+    [knobOffset.x, knobOffset.y, knobSize, size]
   );
 
   return (
     <View style={styles.stickWrap}>
-      <View
-        {...panHandlers}
-        accessible
-        accessibilityHint="Drag to steer"
-        accessibilityLabel={`${label} analog stick`}
-        accessibilityRole="adjustable"
-        style={[styles.stickTrack, dynamicStyles.track]}>
-        <View style={[styles.stickKnob, dynamicStyles.knob]}>
-          <Text style={styles.stickLabel}>{label}</Text>
+      <GestureDetector gesture={gesture}>
+        <View
+          accessible
+          accessibilityHint="Drag to steer"
+          accessibilityLabel={`${label} analog stick`}
+          accessibilityRole="adjustable"
+          style={[styles.stickTrack, dynamicStyles.track]}>
+          <View style={[styles.stickKnob, dynamicStyles.knob]}>
+            <Text style={styles.stickLabel}>{label}</Text>
+          </View>
         </View>
-      </View>
+      </GestureDetector>
     </View>
   );
 });
+
+/**
+ * Create two linked pan gestures that recognize touches simultaneously
+ * on Android. Call once at the parent level (not inside a child component)
+ * so both gestures exist before `.simultaneousWithExternalGesture()` runs.
+ */
+export function useDualStickGestures() {
+  const pairRef = useRef<{ left: PanGesture; right: PanGesture } | null>(null);
+
+  if (!pairRef.current) {
+    const left = Gesture.Pan()
+      .minPointers(1)
+      .maxPointers(1)
+      .shouldCancelWhenOutside(false)
+      .activeOffsetX(-Number.MIN_VALUE) // activate immediately on any movement
+      .activeOffsetY(-Number.MIN_VALUE);
+
+    const right = Gesture.Pan()
+      .minPointers(1)
+      .maxPointers(1)
+      .shouldCancelWhenOutside(false)
+      .activeOffsetX(-Number.MIN_VALUE)
+      .activeOffsetY(-Number.MIN_VALUE);
+
+    // Bidirectional simultaneous recognition — this is the key to
+    // multi-touch on Android's single-responder system.
+    left.simultaneousWithExternalGesture(right);
+    right.simultaneousWithExternalGesture(left);
+
+    pairRef.current = { left, right };
+  }
+
+  return pairRef.current;
+}
 
 export const DigitalButton = memo(function DigitalButton({
   label,
