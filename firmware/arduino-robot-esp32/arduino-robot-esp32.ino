@@ -543,6 +543,11 @@ void setup() {
 
   // BLE Setup dengan Security
   NimBLEDevice::init(BLE_NAME);
+  
+  // CETAK MAC ADDRESS BLE DI SINI
+  Serial.print("BLE Device MAC Address: ");
+  Serial.println(NimBLEDevice::getAddress().toString().c_str());
+  
   NimBLEDevice::setSecurityAuth(true, true, true);  // Bonding, MITM, SC
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
   
@@ -585,18 +590,6 @@ void setup() {
   Serial.println("=== SISTEM PRODUCTION-READY AKTIF ===");
   Serial.printf("Auth Token: %s\n", AUTH_TOKEN);
   Serial.printf("OTA Password: %s\n", OTA_PASSWORD);
-
-    // BLE Setup dengan Security
-  NimBLEDevice::init(BLE_NAME);
-  
-  // CETAK MAC ADDRESS BLE DI SINI
-  Serial.print("BLE Device MAC Address: ");
-  Serial.println(NimBLEDevice::getAddress().toString().c_str());
-  
-  NimBLEDevice::setSecurityAuth(true, true, true);
-  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
-  
-  pServer = NimBLEDevice::createServer();
 }
 
 void loop() {

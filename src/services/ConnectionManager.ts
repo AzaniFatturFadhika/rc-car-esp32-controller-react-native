@@ -278,8 +278,13 @@ export class ConnectionManager {
       // Start RSSI polling
       this.startRssiPolling();
 
-      // Send AUTH
-      this.sendMessage(createAuthMessage());
+      // Send AUTH with a brief delay (500ms) to ensure notification subscription (CCCD write) is fully completed by the OS
+      setTimeout(() => {
+        if (this.connectionStatus === 'authenticating' && this.connectionType === 'ble') {
+          console.log('Sending BLE AUTH message...');
+          this.sendMessage(createAuthMessage());
+        }
+      }, 500);
 
     } catch (error) {
       console.error('BLE Connection error:', error);
@@ -331,7 +336,8 @@ export class ConnectionManager {
   // ==================== MESSAGE HANDLING ====================
   private handleIncomingMessage(data: string) {
     try {
-      const message = JSON.parse(data);
+      const sanitized = data.replace(/\0/g, '').trim();
+      const message = JSON.parse(sanitized);
       if (!message || typeof message !== 'object') return;
       
       // Handle AUTH responses
