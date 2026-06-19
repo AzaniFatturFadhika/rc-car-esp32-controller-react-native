@@ -2,6 +2,8 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useConnectionStore } from '../../store/connectionStore';
 
+const MAX_TICKS_PER_SEC = 150; // Sesuai batasan firmware ESP32
+
 export const TelemetryDisplay: React.FC = () => {
   const { telemetry, connectionStatus } = useConnectionStore();
 
@@ -9,18 +11,22 @@ export const TelemetryDisplay: React.FC = () => {
     return null;
   }
 
+  // Batasi agar tidak melewati batas fisik/kontrol yang ditetapkan firmware
+  const speedL = Math.max(-MAX_TICKS_PER_SEC, Math.min(MAX_TICKS_PER_SEC, telemetry.speedL));
+  const speedR = Math.max(-MAX_TICKS_PER_SEC, Math.min(MAX_TICKS_PER_SEC, telemetry.speedR));
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>TELEMETRY</Text>
       
       <View style={styles.row}>
         <Text style={styles.label}>MOTOR L</Text>
-        <Text style={styles.value}>{Math.round(telemetry.speedL)} RPM</Text>
+        <Text style={styles.value}>{Math.round(speedL)} T/s</Text>
       </View>
 
       <View style={styles.row}>
         <Text style={styles.label}>MOTOR R</Text>
-        <Text style={styles.value}>{Math.round(telemetry.speedR)} RPM</Text>
+        <Text style={styles.value}>{Math.round(speedR)} T/s</Text>
       </View>
     </View>
   );
