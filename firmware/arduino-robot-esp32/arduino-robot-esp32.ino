@@ -1,12 +1,13 @@
 #include <WiFi.h>
 #include <WebSocketsServer.h>
-#include <NimBLEDevice.h> // POIN A: Beralih ke NimBLE (Jauh lebih ringan & stabil di Core 3.x)
-#include <ArduinoJson.h>  // POIN B: Pastikan menggunakan ArduinoJson v7
+#include <NimBLEDevice.h> 
+#include <ArduinoJson.h>  
+#include "driver/pulse_cnt.h" // API PCNT Modern untuk ESP32 Core 3.x (ESP-IDF 5.x)
 
 // ============================================================
-// DEFINISI & KONFIGURASI HARDWARE
+// 1. DEFINISI PIN & KONFIGURASI HARDWARE
 // ============================================================
-// Motor Driver Pins
+// Motor Driver Pins (L298N / TB6612)
 #define ENA 14
 #define ENB 13
 #define IN1 27
@@ -14,7 +15,7 @@
 #define IN3 25
 #define IN4 33
 
-// Encoder Pins (Quadrature Encoders)
+// Encoder Pins (Quadrature)
 #define ENC_L_A 18
 #define ENC_L_B 19
 #define ENC_R_A 21
@@ -24,18 +25,24 @@
 const int PWM_FREQ = 2000;       
 const int PWM_RESOLUTION = 8;    // 0 - 255
 
-// Kinematics & Control Config
-const int DEADZONE = 15;         // POIN C: Deadzone untuk atasi joystick drift (0-100)
-const float SMOOTHING_ALPHA = 0.15; // POIN D: Faktor smoothing (0.0 - 1.0). Lebih kecil = lebih halus tapi lambat respons.
-const float MAX_TICKS_PER_SEC = 150.0; // Kalibrasi: Berapa ticks/detik pada PWM 100%? (Sesuaikan dengan motor Anda)
+// ============================================================
+// 2. KONSTANTA KINEMATIKA & PID (Single Precision 'f')
+// ============================================================
+const int DEADZONE = 15;         // Deadzone joystick (0-100)
+const float SMOOTHING_ALPHA = 0.15f; 
+const float MAX_TICKS_PER_SEC = 150.0f; // Kalibrasi: Ticks/detik pada PWM 100%
 
-// PID Config (Tuning nilai ini sesuai karakteristik motor Anda)
-const float KP = 1.5;  
-const float KI = 3.0;  
-const float KD = 0.05; 
+// PID Gains (Tuning sesuai motor Anda)
+const float KP = 1.5f;  
+const float KI = 3.0f;  
+const float KD = 0.05f; 
+
+// Waktu siklus PID yang DIHARDCODE (Deterministik)
+const float DT = 0.020f; // 20ms = 0.02 detik
+const TickType_t PID_PERIOD_TICKS = pdMS_TO_TICKS(20);
 
 // ============================================================
-// STRUKTUR DATA & PID CONTROLLER
+// 3. STRUKTUR DATA & PID CONTROLLER
 // ============================================================
 struct GamepadCommand {
   int lx;
@@ -43,101 +50,130 @@ struct GamepadCommand {
   char dpad[8];
 };
 
-// Implementasi PID Controller Manual (Lebih fleksibel & tanpa dependensi library eksternal)
 struct PIDController {
     float Kp, Ki, Kd;
-    float integral, prevError;
+    float integral, prevMeasurement;
     float outMin, outMax;
 
     PIDController(float p, float i, float d, float min, float max) 
-        : Kp(p), Ki(i), Kd(d), integral(0), prevError(0), outMin(min), outMax(max) {}
+        : Kp(p), Ki(i), Kd(d), integral(0.0f), prevMeasurement(0.0f), outMin(min), outMax(max) {}
 
-    float compute(float setpoint, float measurement, float dt) {
-        if (dt <= 0) return 0;
+    float compute(float setpoint, float measurement) {
         float error = setpoint - measurement;
         
         // Integrasi dengan Anti-Windup
-        integral += error * dt;
-        integral = constrain(integral, outMin / Ki, outMax / Ki); 
+        integral += error * DT;
         
-        // Derivatif
-        float derivative = (error - prevError) / dt;
-        prevError = error;
+        // PERBAIKAN: Cegah Division by Zero saat Ki = 0
+        if (Ki != 0.0f) {
+            integral = constrain(integral, outMin / Ki, outMax / Ki); 
+        } else {
+            integral = 0.0f; 
+        }
         
-        // Hitung Output
-        float output = Kp * error + Ki * integral + Kd * derivative;
+        // PERBAIKAN: Derivative on Measurement (Mencegah Derivative Kick)
+        float derivative = -(measurement - prevMeasurement) / DT; 
+        prevMeasurement = measurement; 
+        
+        float output = (Kp * error) + (Ki * integral) + (Kd * derivative);
         return constrain(output, outMin, outMax);
     }
     
-    void reset() { integral = 0; prevError = 0; }
+    void reset() { integral = 0.0f; prevMeasurement = 0.0f; }
 };
 
-// FreeRTOS Queue Handle
+// Global Variables
 QueueHandle_t commandQueue;
-
-// Jaringan & BLE Global
 WebSocketsServer webSocket(81);
 NimBLEServer *pServer = NULL;
 
-// Variabel Global untuk Encoder & PID
-volatile int32_t encoderLeftTicks = 0;
-volatile int32_t encoderRightTicks = 0;
-PIDController pidLeft(KP, KI, KD, -255, 255);
-PIDController pidRight(KP, KI, KD, -255, 255);
+PIDController pidLeft(KP, KI, KD, -255.0f, 255.0f);
+PIDController pidRight(KP, KI, KD, -255.0f, 255.0f);
+
+// PCNT Handles (ESP-IDF 5.x)
+pcnt_unit_handle_t pcnt_unit_L = NULL;
+pcnt_unit_handle_t pcnt_unit_R = NULL;
 
 // ============================================================
-// INTERRUPT SERVICE ROUTINES (ENCODER)
+// 4. HARDWARE ENCODER (PCNT - API ESP-IDF 5.x / Core 3.x)
 // ============================================================
-void IRAM_ATTR readEncoderLeft() {
-  // Baca state pin B saat pin A trigger (Rising edge)
-  if (digitalRead(ENC_L_A) == digitalRead(ENC_L_B)) encoderLeftTicks++;
-  else encoderLeftTicks--;
+void setup_pcnt_unit(pcnt_unit_handle_t *unit, int pin_pulse, int pin_ctrl) {
+    pcnt_unit_config_t unit_config = {
+        .high_limit = 32767,
+        .low_limit = -32768,
+    };
+    pcnt_new_unit(&unit_config, unit);
+
+    // Channel A
+    pcnt_chan_config_t chan_A_cfg = {};
+    chan_A_cfg.pulse_gpio_num = pin_pulse; // PERBAIKAN: pulse_gpio_num
+    chan_A_cfg.ctrl_gpio_num = pin_ctrl;   // PERBAIKAN: ctrl_gpio_num
+    pcnt_channel_handle_t chan_A;          // PERBAIKAN: pcnt_channel_handle_t
+    pcnt_new_channel(*unit, &chan_A_cfg, &chan_A);
+    
+    // Channel B
+    pcnt_chan_config_t chan_B_cfg = {};
+    chan_B_cfg.pulse_gpio_num = pin_ctrl;
+    chan_B_cfg.ctrl_gpio_num = pin_pulse;
+    pcnt_channel_handle_t chan_B;          // PERBAIKAN: pcnt_channel_handle_t
+    pcnt_new_channel(*unit, &chan_B_cfg, &chan_B);
+
+    // Logika Quadrature 4x
+    pcnt_channel_set_edge_action(chan_A, PCNT_CHANNEL_EDGE_ACTION_INCREASE, PCNT_CHANNEL_EDGE_ACTION_DECREASE);
+    pcnt_channel_set_level_action(chan_A, PCNT_CHANNEL_LEVEL_ACTION_KEEP, PCNT_CHANNEL_LEVEL_ACTION_INVERSE);
+    
+    pcnt_channel_set_edge_action(chan_B, PCNT_CHANNEL_EDGE_ACTION_DECREASE, PCNT_CHANNEL_EDGE_ACTION_INCREASE);
+    pcnt_channel_set_level_action(chan_B, PCNT_CHANNEL_LEVEL_ACTION_KEEP, PCNT_CHANNEL_LEVEL_ACTION_INVERSE);
+
+    pcnt_unit_enable(*unit);
+    pcnt_unit_clear_count(*unit);
+    pcnt_unit_start(*unit);
 }
 
-void IRAM_ATTR readEncoderRight() {
-  if (digitalRead(ENC_R_A) == digitalRead(ENC_R_B)) encoderRightTicks++;
-  else encoderRightTicks--;
+void initEncodersPCNT() {
+    setup_pcnt_unit(&pcnt_unit_L, ENC_L_A, ENC_L_B);
+    setup_pcnt_unit(&pcnt_unit_R, ENC_R_A, ENC_R_B);
+}
+
+int32_t get_pcnt_count(pcnt_unit_handle_t unit) {
+    int pulse_count = 0;
+    pcnt_unit_get_count(unit, &pulse_count);
+    return pulse_count;
 }
 
 // ============================================================
-// DRIVER MOTOR & KINEMATIKA
+// 5. DRIVER MOTOR & KINEMATIKA
 // ============================================================
 void initMotors() {
   pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT);
   pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT);
   
-  pinMode(ENC_L_A, INPUT_PULLUP); pinMode(ENC_L_B, INPUT_PULLUP);
-  pinMode(ENC_R_A, INPUT_PULLUP); pinMode(ENC_R_B, INPUT_PULLUP);
-
+  // Sintaks Modern ESP32 Core 3.x
   ledcAttach(ENA, PWM_FREQ, PWM_RESOLUTION);
   ledcAttach(ENB, PWM_FREQ, PWM_RESOLUTION);
-
-  // Attach Interrupts untuk Encoder
-  attachInterrupt(digitalPinToInterrupt(ENC_L_A), readEncoderLeft, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(ENC_R_A), readEncoderRight, CHANGE);
+  
+  initEncodersPCNT();
 }
 
 void setMotorSpeeds(float pwmL, float pwmR) {
-  int dutyL = constrain(abs(pwmL), 0, 255);
-  int dutyR = constrain(abs(pwmR), 0, 255);
+  int dutyL = constrain(abs((int)pwmL), 0, 255);
+  int dutyR = constrain(abs((int)pwmR), 0, 255);
 
-  // Motor Kiri
   if (pwmL >= 0) { digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW); } 
   else { digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH); }
   ledcWrite(ENA, dutyL);
 
-  // Motor Kanan
   if (pwmR >= 0) { digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW); } 
   else { digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH); }
   ledcWrite(ENB, dutyR);
 }
 
-// POIN C: Implementasi Deadzone di sini
 void driveKinematics(int lx, int ly, const char* dpad, int &targetL, int &targetR) {
-  // Terapkan Deadzone pada Analog Stick
+  // Deadzone
   if (abs(lx) < DEADZONE) lx = 0;
   if (abs(ly) < DEADZONE) ly = 0;
 
+  // Prioritas D-Pad
   if (strlen(dpad) > 0) {
     if (strcmp(dpad, "UP") == 0)        { targetL = 100; targetR = 100; }
     else if (strcmp(dpad, "DOWN") == 0)  { targetL = -100; targetR = -100; }
@@ -146,6 +182,7 @@ void driveKinematics(int lx, int ly, const char* dpad, int &targetL, int &target
     return;
   }
 
+  // Analog Stick (Differential Drive)
   if (lx != 0 || ly != 0) {
     int forward = -ly; 
     int turn = lx;     
@@ -157,23 +194,19 @@ void driveKinematics(int lx, int ly, const char* dpad, int &targetL, int &target
 }
 
 // ============================================================
-// TASK CORE 0: REAL-TIME PID CONTROL LOOP
+// 6. TASK CORE 0: REAL-TIME PID CONTROL LOOP
 // ============================================================
 void motorControlTask(void *pvParameters) {
   initMotors();
-  setMotorSpeeds(0, 0);
+  setMotorSpeeds(0.0f, 0.0f);
   
   GamepadCommand receivedCmd;
   unsigned long lastCommandTime = millis();
   const unsigned long WATCHDOG_TIMEOUT = 500;
 
-  // Variabel state untuk Smoothing & PID
-  float smoothTargetL = 0, smoothTargetR = 0;
-  int32_t lastTicksL = 0, lastTicksR = 0;
-  
-  // Setup Periodic Task (50Hz = setiap 20ms)
+  float smoothTargetL = 0.0f, smoothTargetR = 0.0f;
+  int16_t lastTicksL = 0, lastTicksR = 0;
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  const TickType_t xFrequency = pdMS_TO_TICKS(20); 
 
   while (1) {
     // 1. Cek Queue (Non-blocking)
@@ -181,73 +214,71 @@ void motorControlTask(void *pvParameters) {
       lastCommandTime = millis();
     }
 
-    // 2. Hitung Target Kinematika & Watchdog
+    // 2. Hitung Target & Watchdog
     int rawTargetL = 0, rawTargetR = 0;
     if (millis() - lastCommandTime < WATCHDOG_TIMEOUT) {
       driveKinematics(receivedCmd.lx, receivedCmd.ly, receivedCmd.dpad, rawTargetL, rawTargetR);
     } else {
-      // WATCHDOG: Putus koneksi, paksa berhenti & reset PID
       rawTargetL = 0; rawTargetR = 0;
       pidLeft.reset(); pidRight.reset(); 
     }
 
-    // 3. POIN D: Smoothing (Exponential Moving Average)
+    // 3. Smoothing (Exponential Moving Average)
     smoothTargetL += (rawTargetL - smoothTargetL) * SMOOTHING_ALPHA;
     smoothTargetR += (rawTargetR - smoothTargetR) * SMOOTHING_ALPHA;
+    
+    // Snap-to-zero untuk mencegah motor berdengung saat idle
+    if (abs(smoothTargetL) < 1.0f) smoothTargetL = 0.0f;
+    if (abs(smoothTargetR) < 1.0f) smoothTargetR = 0.0f;
 
     // 4. Konversi Target (%) ke Setpoint PID (Ticks/detik)
-    float setpointL = smoothTargetL * (MAX_TICKS_PER_SEC / 100.0);
-    float setpointR = smoothTargetR * (MAX_TICKS_PER_SEC / 100.0);
+    float setpointL = smoothTargetL * (MAX_TICKS_PER_SEC / 100.0f);
+    float setpointR = smoothTargetR * (MAX_TICKS_PER_SEC / 100.0f);
 
-    // 5. Baca Actual Speed dari Encoder
-    unsigned long currentTime = micros();
-    static unsigned long lastTime = currentTime;
-    float dt = (currentTime - lastTime) / 1000000.0; // dt dalam detik
-    lastTime = currentTime;
-
-    // Baca volatile variables (Aman di ESP32 32-bit)
-    int32_t currentTicksL = encoderLeftTicks;
-    int32_t currentTicksR = encoderRightTicks;
+    // 5. Baca Actual Speed dari PCNT (Hardware)
+    int32_t currentTicksL = get_pcnt_count(pcnt_unit_L);
+    int32_t currentTicksR = get_pcnt_count(pcnt_unit_R);
     
-    float actualSpeedL = (currentTicksL - lastTicksL) / dt;
-    float actualSpeedR = (currentTicksR - lastTicksR) / dt;
+    // PERBAIKAN: Delta int16_t menangani 16-bit wrap-around secara natural
+    int16_t deltaL = (int16_t)currentTicksL - lastTicksL;
+    int16_t deltaR = (int16_t)currentTicksR - lastTicksR;
     
-    lastTicksL = currentTicksL;
-    lastTicksR = currentTicksR;
+    float actualSpeedL = (float)deltaL / DT;
+    float actualSpeedR = (float)deltaR / DT;
+    
+    lastTicksL = (int16_t)currentTicksL;
+    lastTicksR = (int16_t)currentTicksR;
 
     // 6. Compute PID & Output ke Motor
-    float pwmL = pidLeft.compute(setpointL, actualSpeedL, dt);
-    float pwmR = pidRight.compute(setpointR, actualSpeedR, dt);
+    float pwmL = pidLeft.compute(setpointL, actualSpeedL);
+    float pwmR = pidRight.compute(setpointR, actualSpeedR);
 
     setMotorSpeeds(pwmL, pwmR);
 
-    // Tunggu hingga siklus 20ms berikutnya (Menjaga dt tetap konstan)
-    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    // 7. Tunggu siklus 20ms berikutnya (Menjaga DT tetap eksak)
+    vTaskDelayUntil(&xLastWakeTime, PID_PERIOD_TICKS);
   }
 }
 
 // ============================================================
-// NETWORK INGESTION ENGINE (POIN B: ArduinoJson v7)
+// 7. NETWORK INGESTION (Zero-Alloc & JSON v7)
 // ============================================================
 void parseAndEnqueue(uint8_t* payload, size_t length) {
-  JsonDocument doc; // Sintaks v7 (Otomatis alokasi stack)
+  JsonDocument doc; // Sintaks ArduinoJson v7
   DeserializationError err = deserializeJson(doc, payload, length);
   
   if (!err) {
     GamepadCommand cmd;
     cmd.lx = doc["LX"] | 0;
     cmd.ly = doc["LY"] | 0;
-    
-    // Sintaks v7 yang aman untuk string
     const char* dpad = doc["DPAD"] | ""; 
     strlcpy(cmd.dpad, dpad, sizeof(cmd.dpad));
-    
     xQueueOverwrite(commandQueue, &cmd);
   }
 }
 
 // ============================================================
-// CALLBACKS RADIO (WI-FI & NimBLE)
+// 8. CALLBACKS RADIO (Zero-Heap BLE)
 // ============================================================
 void webSocketEvent(uint8_t client_num, WStype_t type, uint8_t * payload, size_t length) {
   if (type == WStype_TEXT) {
@@ -260,9 +291,12 @@ void webSocketEvent(uint8_t client_num, WStype_t type, uint8_t * payload, size_t
 
 class BleCallbacks: public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pChar) {
-    String rx = pChar->getValue();
-    if (rx.length() > 0) {
-      parseAndEnqueue((uint8_t*)rx.c_str(), rx.length());
+    // PERBAIKAN: API NimBLE terbaru mengembalikan objek NimBLEAttValue
+    NimBLEAttValue val = pChar->getValue();
+    
+    if (val.length() > 0) {
+      // val.data() mengambil pointer data, val.length() mengambil ukuran
+      parseAndEnqueue((uint8_t*)val.data(), val.length());
     }
   }
 };
@@ -272,26 +306,31 @@ class ServerCallbacks: public NimBLEServerCallbacks {
   void onDisconnect(NimBLEServer* pServer) {
     GamepadCommand emptyCmd = {0, 0, ""};
     xQueueOverwrite(commandQueue, &emptyCmd);
-    NimBLEDevice::startAdvertising(); // Auto-advertise ulang (Sintaks NimBLE)
+    NimBLEDevice::startAdvertising(); 
   }
 };
 
 // ============================================================
-// SETUP & LOOP
+// 9. SETUP & LOOP
 // ============================================================
 void setup() {
   Serial.begin(115200);
+  delay(500); // Tunggu serial monitor stabil
 
+  // 1. Inisialisasi Queue
   commandQueue = xQueueCreate(1, sizeof(GamepadCommand));
 
-  // Lempar Task Kontrol Motor & PID ke CORE 0
+  // 2. Core 0: Real-Time PID Task
   xTaskCreatePinnedToCore(motorControlTask, "MotorPIDTask", 4096, NULL, 5, NULL, 0);
 
-  // Infrastruktur Radio di Core 1
-  WiFi.softAP("ESP32-Robot", "12345678");
+  // 3. Core 1: Network Infrastructure
+  WiFi.softAP("ESP32-RC-Car", "12345678");
+  Serial.println("WiFi AP Started: ESP32-RC-Car");
+  
   webSocket.begin();
   webSocket.onEvent(webSocketEvent);
 
+  // BLE Setup (NimBLE)
   NimBLEDevice::init("ESP32-Gamepad");
   pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
@@ -299,19 +338,17 @@ void setup() {
   NimBLEService *pService = pServer->createService("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
   NimBLECharacteristic *pRx = pService->createCharacteristic(
                              "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
-                             NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR // Sintaks NimBLE
+                             NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR
                            );
   pRx->setCallbacks(new BleCallbacks());
   pService->start();
   
-  NimBLEAdvertising *pAdvertising = NimBLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
-  pServer->startAdvertising();
-
-  Serial.println("Arsitektur Dual-Core PID Aktif!");
+  NimBLEDevice::getAdvertising()->start();
+  Serial.println("Sistem PID Deterministik & PCNT Aktif!");
 }
 
 void loop() {
+  // Core 1 hanya fokus mendengarkan WebSocket
   webSocket.loop();
   vTaskDelay(pdMS_TO_TICKS(1));
 }

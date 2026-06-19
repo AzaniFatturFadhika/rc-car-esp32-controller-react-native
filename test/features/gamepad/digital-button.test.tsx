@@ -6,11 +6,11 @@ import { MultiTouchProvider } from "@/hooks/useMultiTouch";
 const mockOnPressIn = jest.fn();
 const mockOnPressOut = jest.fn();
 
-// Mock measureInWindow to simulate layout position in window
+// Mock measure to simulate layout position relative to root view
 beforeAll(() => {
-  jest.spyOn(View.prototype, "measureInWindow").mockImplementation((cb) => {
-    // x=10, y=20, width=100, height=50
-    cb(10, 20, 100, 50);
+  jest.spyOn(View.prototype, "measure").mockImplementation((cb) => {
+    // x=0, y=0, width=100, height=50, pageX=10, pageY=20
+    cb(0, 0, 100, 50, 10, 20);
   });
 });
 

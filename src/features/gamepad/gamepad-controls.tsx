@@ -77,22 +77,22 @@ export const AnalogStick = memo(function AnalogStick({
 
   const onLayout = () => {
     let retries = 0;
-    const measure = () => {
-      containerRef.current?.measureInWindow((x, y, width, height) => {
+    const doMeasure = () => {
+      containerRef.current?.measure((x, y, width, height, pageX, pageY) => {
         if (
-          typeof x === "number" && !isNaN(x) &&
-          typeof y === "number" && !isNaN(y) &&
+          typeof pageX === "number" && !isNaN(pageX) &&
+          typeof pageY === "number" && !isNaN(pageY) &&
           typeof width === "number" && width > 0 &&
           typeof height === "number" && height > 0
         ) {
-          setLayout({ pageX: x, pageY: y, width, height });
+          setLayout({ pageX, pageY, width, height });
         } else if (retries < 10) {
           retries++;
-          measureTimeoutRef.current = setTimeout(measure, 50);
+          measureTimeoutRef.current = setTimeout(doMeasure, 50);
         }
       });
     };
-    measure();
+    doMeasure();
   };
 
   useEffect(() => {
@@ -241,22 +241,22 @@ export const DigitalButton = memo(function DigitalButton({
 
   const onLayout = () => {
     let retries = 0;
-    const measure = () => {
-      containerRef.current?.measureInWindow((x, y, width, height) => {
+    const doMeasure = () => {
+      containerRef.current?.measure((x, y, width, height, pageX, pageY) => {
         if (
-          typeof x === "number" && !isNaN(x) &&
-          typeof y === "number" && !isNaN(y) &&
+          typeof pageX === "number" && !isNaN(pageX) &&
+          typeof pageY === "number" && !isNaN(pageY) &&
           typeof width === "number" && width > 0 &&
           typeof height === "number" && height > 0
         ) {
-          setLayout({ pageX: x, pageY: y, width, height });
+          setLayout({ pageX, pageY, width, height });
         } else if (retries < 10) {
           retries++;
-          measureTimeoutRef.current = setTimeout(measure, 50);
+          measureTimeoutRef.current = setTimeout(doMeasure, 50);
         }
       });
     };
-    measure();
+    doMeasure();
   };
 
   useEffect(() => {
@@ -359,22 +359,22 @@ export const DPad = memo(function DPad({
 
   const onLayout = () => {
     let retries = 0;
-    const measure = () => {
-      containerRef.current?.measureInWindow((x, y, width, height) => {
+    const doMeasure = () => {
+      containerRef.current?.measure((x, y, width, height, pageX, pageY) => {
         if (
-          typeof x === "number" && !isNaN(x) &&
-          typeof y === "number" && !isNaN(y) &&
+          typeof pageX === "number" && !isNaN(pageX) &&
+          typeof pageY === "number" && !isNaN(pageY) &&
           typeof width === "number" && width > 0 &&
           typeof height === "number" && height > 0
         ) {
-          setLayout({ pageX: x, pageY: y, width, height });
+          setLayout({ pageX, pageY, width, height });
         } else if (retries < 10) {
           retries++;
-          measureTimeoutRef.current = setTimeout(measure, 50);
+          measureTimeoutRef.current = setTimeout(doMeasure, 50);
         }
       });
     };
-    measure();
+    doMeasure();
   };
 
   useEffect(() => {
