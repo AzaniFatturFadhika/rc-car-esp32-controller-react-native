@@ -1,13 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
-import {
-    Gesture,
-    GestureDetector,
-    type PanGesture,
-} from "react-native-gesture-handler";
-import { useSharedValue } from "react-native-reanimated";
-import { scheduleOnRN } from "react-native-worklets";
-
+import { StyleSheet, Text, View } from "react-native";
+import { useMultiTouchContext } from "@/hooks/useMultiTouch";
 import type { ActionButtonId, ButtonId, DPadDirection } from "./types";
 
 type AnalogStickProps = {
@@ -15,8 +8,6 @@ type AnalogStickProps = {
   size: number;
   knobSize: number;
   deadzone?: number;
-  /** Pre-built pan gesture with simultaneous multi-touch already configured. */
-  gesture: PanGesture;
   onMove: (x: number, y: number) => void;
   onRelease: () => void;
 };
@@ -53,75 +44,139 @@ function toAxis(delta: number, radius: number) {
   return Math.round(clamp((delta / radius) * 100, -100, 100));
 }
 
-function usePressHandlers(onPressIn: () => void, onPressOut: () => void) {
-  return {
-    onPressIn,
-    onPressOut,
-    onPressOutCapture: onPressOut,
-  };
-}
-
 export const AnalogStick = memo(function AnalogStick({
   label,
   size,
   knobSize,
   deadzone = DEADZONE,
-  gesture,
   onMove,
   onRelease,
 }: AnalogStickProps) {
   const radius = (size - knobSize) / 2;
   const [knobOffset, setKnobOffset] = useState({ x: 0, y: 0 });
-  const lastAxisRef = useRef({ x: 0, y: 0 });
 
-  const onMoveShared = useSharedValue(onMove);
-  const onReleaseShared = useSharedValue(onRelease);
+  const onMoveRef = useRef(onMove);
+  const onReleaseRef = useRef(onRelease);
 
   useEffect(() => {
-    onMoveShared.value = onMove;
-    onReleaseShared.value = onRelease;
-  }, [onMove, onRelease]);
+    onMoveRef.current = onMove;
+  }, [onMove]);
 
-  // Rebind gesture callbacks whenever move/release or size changes.
-  // The gesture identity stays stable (same object reference) so
-  // GestureDetector does not remount, but RNGH reads the latest
-  // shared values on every event.
   useEffect(() => {
-    gesture
-      .onUpdate((e) => {
-        const distance = Math.hypot(e.translationX, e.translationY);
-        const limitedDistance = Math.min(distance, radius);
-        const angle = Math.atan2(e.translationY, e.translationX);
-        const nextOffset = {
-          x: Math.cos(angle) * limitedDistance,
-          y: Math.sin(angle) * limitedDistance,
-        };
-        const nextAxis = {
-          x: toAxis(nextOffset.x, radius),
-          y: toAxis(nextOffset.y, radius),
-        };
+    onReleaseRef.current = onRelease;
+  }, [onRelease]);
 
-        setKnobOffset(nextOffset);
+  const containerRef = useRef<View>(null);
+  const measureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [layout, setLayout] = useState<{
+    pageX: number;
+    pageY: number;
+    width: number;
+    height: number;
+  } | null>(null);
 
+  const onLayout = () => {
+    let retries = 0;
+    const measure = () => {
+      containerRef.current?.measureInWindow((x, y, width, height) => {
         if (
-          Math.abs(nextAxis.x - lastAxisRef.current.x) >= deadzone ||
-          Math.abs(nextAxis.y - lastAxisRef.current.y) >= deadzone
+          typeof x === "number" && !isNaN(x) &&
+          typeof y === "number" && !isNaN(y) &&
+          typeof width === "number" && width > 0 &&
+          typeof height === "number" && height > 0
         ) {
-          lastAxisRef.current = nextAxis;
-          scheduleOnRN(onMoveShared.value, nextAxis.x, nextAxis.y);
+          setLayout({ pageX: x, pageY: y, width, height });
+        } else if (retries < 10) {
+          retries++;
+          measureTimeoutRef.current = setTimeout(measure, 50);
         }
-      })
-      .onEnd(() => {
-        lastAxisRef.current = { x: 0, y: 0 };
-        setKnobOffset({ x: 0, y: 0 });
-        scheduleOnRN(onReleaseShared.value);
-      })
-      .onFinalize(() => {
-        lastAxisRef.current = { x: 0, y: 0 };
-        setKnobOffset({ x: 0, y: 0 });
-        scheduleOnRN(onReleaseShared.value);
       });
-  }, [gesture, radius, deadzone, onMoveShared, onReleaseShared]);
+    };
+    measure();
+  };
+
+  useEffect(() => {
+    return () => {
+      if (measureTimeoutRef.current) {
+        clearTimeout(measureTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const { registerZone } = useMultiTouchContext();
+
+  useEffect(() => {
+    if (!layout) return;
+
+    const cx = layout.pageX + layout.width / 2;
+    const cy = layout.pageY + layout.height / 2;
+
+    let activeId: string | number | null = null;
+    let lastAxis = { x: 0, y: 0 };
+
+    const hitTest = (x: number, y: number) => {
+      return (
+        x >= layout.pageX &&
+        x <= layout.pageX + layout.width &&
+        y >= layout.pageY &&
+        y <= layout.pageY + layout.height
+      );
+    };
+
+    const handleStart = (id: string | number, x: number, y: number) => {
+      if (activeId !== null) return;
+      activeId = id;
+      handleMove(id, x, y);
+    };
+
+    const handleMove = (id: string | number, x: number, y: number) => {
+      if (activeId !== id) return;
+
+      const dx = x - cx;
+      const dy = y - cy;
+      const distance = Math.hypot(dx, dy);
+      const limitedDistance = Math.min(distance, radius);
+
+      let nextOffset = { x: 0, y: 0 };
+      if (distance > 0) {
+        nextOffset = {
+          x: (dx / distance) * limitedDistance,
+          y: (dy / distance) * limitedDistance,
+        };
+      }
+
+      setKnobOffset(nextOffset);
+
+      const nx = toAxis(nextOffset.x, radius);
+      const ny = toAxis(nextOffset.y, radius);
+
+      const ax = Math.abs(nx) >= deadzone ? nx : 0;
+      const ay = Math.abs(ny) >= deadzone ? ny : 0;
+
+      if (ax !== lastAxis.x || ay !== lastAxis.y) {
+        lastAxis = { x: ax, y: ay };
+        onMoveRef.current(ax, ay);
+      }
+    };
+
+    const handleEnd = (id: string | number) => {
+      if (activeId !== id) return;
+      activeId = null;
+      setKnobOffset({ x: 0, y: 0 });
+      lastAxis = { x: 0, y: 0 };
+      onReleaseRef.current();
+    };
+
+    const unsubscribe = registerZone({
+      id: `analog-${label}`,
+      hitTest,
+      onStart: handleStart,
+      onMove: handleMove,
+      onEnd: handleEnd,
+    });
+
+    return unsubscribe;
+  }, [layout, radius, deadzone, registerZone, label]);
 
   const dynamicStyles = useMemo(
     () => ({
@@ -138,55 +193,23 @@ export const AnalogStick = memo(function AnalogStick({
 
   return (
     <View style={styles.stickWrap}>
-      <GestureDetector gesture={gesture}>
-        <View
-          accessible
-          accessibilityHint="Drag to steer"
-          accessibilityLabel={`${label} analog stick`}
-          accessibilityRole="adjustable"
-          style={[styles.stickTrack, dynamicStyles.track]}>
-          <View style={[styles.stickKnob, dynamicStyles.knob]}>
-            <Text style={styles.stickLabel}>{label}</Text>
-          </View>
+      <View
+        ref={containerRef}
+        onLayout={onLayout}
+        pointerEvents="none"
+        accessible
+        accessibilityHint="Drag to steer"
+        accessibilityLabel={`${label} analog stick`}
+        accessibilityRole="adjustable"
+        style={[styles.stickTrack, dynamicStyles.track]}
+      >
+        <View style={[styles.stickKnob, dynamicStyles.knob]}>
+          <Text style={styles.stickLabel}>{label}</Text>
         </View>
-      </GestureDetector>
+      </View>
     </View>
   );
 });
-
-/**
- * Create two linked pan gestures that recognize touches simultaneously
- * on Android. Call once at the parent level (not inside a child component)
- * so both gestures exist before `.simultaneousWithExternalGesture()` runs.
- */
-export function useDualStickGestures() {
-  const pairRef = useRef<{ left: PanGesture; right: PanGesture } | null>(null);
-
-  if (!pairRef.current) {
-    const left = Gesture.Pan()
-      .minPointers(1)
-      .maxPointers(1)
-      .shouldCancelWhenOutside(false)
-      .activeOffsetX(-Number.MIN_VALUE) // activate immediately on any movement
-      .activeOffsetY(-Number.MIN_VALUE);
-
-    const right = Gesture.Pan()
-      .minPointers(1)
-      .maxPointers(1)
-      .shouldCancelWhenOutside(false)
-      .activeOffsetX(-Number.MIN_VALUE)
-      .activeOffsetY(-Number.MIN_VALUE);
-
-    // Bidirectional simultaneous recognition — this is the key to
-    // multi-touch on Android's single-responder system.
-    left.simultaneousWithExternalGesture(right);
-    right.simultaneousWithExternalGesture(left);
-
-    pairRef.current = { left, right };
-  }
-
-  return pairRef.current;
-}
 
 export const DigitalButton = memo(function DigitalButton({
   label,
@@ -204,21 +227,109 @@ export const DigitalButton = memo(function DigitalButton({
       height: size,
       borderRadius: wide ? 10 : size / 2,
     }),
-    [size, wide],
+    [size, wide]
   );
-  const handlers = usePressHandlers(onPressIn, onPressOut);
+
+  const containerRef = useRef<View>(null);
+  const measureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [layout, setLayout] = useState<{
+    pageX: number;
+    pageY: number;
+    width: number;
+    height: number;
+  } | null>(null);
+
+  const onLayout = () => {
+    let retries = 0;
+    const measure = () => {
+      containerRef.current?.measureInWindow((x, y, width, height) => {
+        if (
+          typeof x === "number" && !isNaN(x) &&
+          typeof y === "number" && !isNaN(y) &&
+          typeof width === "number" && width > 0 &&
+          typeof height === "number" && height > 0
+        ) {
+          setLayout({ pageX: x, pageY: y, width, height });
+        } else if (retries < 10) {
+          retries++;
+          measureTimeoutRef.current = setTimeout(measure, 50);
+        }
+      });
+    };
+    measure();
+  };
+
+  useEffect(() => {
+    return () => {
+      if (measureTimeoutRef.current) {
+        clearTimeout(measureTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const onPressInRef = useRef(onPressIn);
+  const onPressOutRef = useRef(onPressOut);
+
+  useEffect(() => {
+    onPressInRef.current = onPressIn;
+  }, [onPressIn]);
+
+  useEffect(() => {
+    onPressOutRef.current = onPressOut;
+  }, [onPressOut]);
+
+  const { registerZone } = useMultiTouchContext();
+
+  useEffect(() => {
+    if (!layout) return;
+
+    let activeId: string | number | null = null;
+
+    const hitTest = (x: number, y: number) => {
+      return (
+        x >= layout.pageX &&
+        x <= layout.pageX + layout.width &&
+        y >= layout.pageY &&
+        y <= layout.pageY + layout.height
+      );
+    };
+
+    const handleStart = (id: string | number) => {
+      if (activeId !== null) return;
+      activeId = id;
+      onPressInRef.current();
+    };
+
+    const handleEnd = (id: string | number) => {
+      if (activeId !== id) return;
+      activeId = null;
+      onPressOutRef.current();
+    };
+
+    const unsubscribe = registerZone({
+      id: `btn-${label}-${variant}-${accessibilityLabel}`,
+      hitTest,
+      onStart: handleStart,
+      onMove: () => {},
+      onEnd: handleEnd,
+    });
+
+    return unsubscribe;
+  }, [layout, registerZone, label, variant, accessibilityLabel]);
 
   return (
-    <Pressable
-      {...handlers}
+    <View
+      ref={containerRef}
+      onLayout={onLayout}
+      pointerEvents="none"
       accessible
       accessibilityLabel={accessibilityLabel}
       accessibilityRole="button"
-      style={({ pressed }) => [
+      style={[
         styles.button,
         dynamicStyle,
         styles[variant],
-        (pressed || active) && styles.buttonActive,
+        active && styles.buttonActive,
       ]}
     >
       <Text
@@ -229,7 +340,7 @@ export const DigitalButton = memo(function DigitalButton({
       >
         {label}
       </Text>
-    </Pressable>
+    </View>
   );
 });
 
@@ -237,47 +348,150 @@ export const DPad = memo(function DPad({
   activeDirection,
   onDirectionChange,
 }: DPadProps) {
-  const pressDirection = (direction: DPadDirection) => () =>
-    onDirectionChange(direction);
-  const releaseDirection = (direction: DPadDirection) => () => {
-    if (activeDirection === direction) {
-      onDirectionChange(null);
-    }
+  const containerRef = useRef<View>(null);
+  const measureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [layout, setLayout] = useState<{
+    pageX: number;
+    pageY: number;
+    width: number;
+    height: number;
+  } | null>(null);
+
+  const onLayout = () => {
+    let retries = 0;
+    const measure = () => {
+      containerRef.current?.measureInWindow((x, y, width, height) => {
+        if (
+          typeof x === "number" && !isNaN(x) &&
+          typeof y === "number" && !isNaN(y) &&
+          typeof width === "number" && width > 0 &&
+          typeof height === "number" && height > 0
+        ) {
+          setLayout({ pageX: x, pageY: y, width, height });
+        } else if (retries < 10) {
+          retries++;
+          measureTimeoutRef.current = setTimeout(measure, 50);
+        }
+      });
+    };
+    measure();
   };
 
+  useEffect(() => {
+    return () => {
+      if (measureTimeoutRef.current) {
+        clearTimeout(measureTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const onDirectionChangeRef = useRef(onDirectionChange);
+
+  useEffect(() => {
+    onDirectionChangeRef.current = onDirectionChange;
+  }, [onDirectionChange]);
+
+  const { registerZone } = useMultiTouchContext();
+
+  useEffect(() => {
+    if (!layout) return;
+
+    const cx = layout.pageX + layout.width / 2;
+    const cy = layout.pageY + layout.height / 2;
+
+    let activeId: string | number | null = null;
+    let lastDirection: DPadDirection | null = null;
+
+    const hitTest = (x: number, y: number) => {
+      return (
+        x >= layout.pageX &&
+        x <= layout.pageX + layout.width &&
+        y >= layout.pageY &&
+        y <= layout.pageY + layout.height
+      );
+    };
+
+    const detectDirection = (x: number, y: number): DPadDirection | null => {
+      const dx = x - cx;
+      const dy = y - cy;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist < 15) return null;
+
+      if (Math.abs(dx) > Math.abs(dy)) {
+        return dx > 0 ? "RIGHT" : "LEFT";
+      } else {
+        return dy > 0 ? "DOWN" : "UP";
+      }
+    };
+
+    const handleStart = (id: string | number, x: number, y: number) => {
+      if (activeId !== null) return;
+      activeId = id;
+      const dir = detectDirection(x, y);
+      lastDirection = dir;
+      onDirectionChangeRef.current(dir);
+    };
+
+    const handleMove = (id: string | number, x: number, y: number) => {
+      if (activeId !== id) return;
+      const dir = detectDirection(x, y);
+      if (dir !== lastDirection) {
+        lastDirection = dir;
+        onDirectionChangeRef.current(dir);
+      }
+    };
+
+    const handleEnd = (id: string | number) => {
+      if (activeId !== id) return;
+      activeId = null;
+      lastDirection = null;
+      onDirectionChangeRef.current(null);
+    };
+
+    const unsubscribe = registerZone({
+      id: "dpad",
+      hitTest,
+      onStart: handleStart,
+      onMove: handleMove,
+      onEnd: handleEnd,
+    });
+
+    return unsubscribe;
+  }, [layout, registerZone]);
+
   return (
-    <View accessible accessibilityLabel="D-pad" style={styles.dpad}>
+    <View
+      ref={containerRef}
+      onLayout={onLayout}
+      pointerEvents="none"
+      accessible
+      accessibilityLabel="D-pad"
+      style={styles.dpad}
+    >
       <DPadButton
         direction="UP"
         label="▲"
         activeDirection={activeDirection}
         style={styles.dpadUp}
-        onPressIn={pressDirection("UP")}
-        onPressOut={releaseDirection("UP")}
       />
       <DPadButton
         direction="LEFT"
         label="◄"
         activeDirection={activeDirection}
         style={styles.dpadLeft}
-        onPressIn={pressDirection("LEFT")}
-        onPressOut={releaseDirection("LEFT")}
       />
       <DPadButton
         direction="RIGHT"
         label="►"
         activeDirection={activeDirection}
         style={styles.dpadRight}
-        onPressIn={pressDirection("RIGHT")}
-        onPressOut={releaseDirection("RIGHT")}
       />
       <DPadButton
         direction="DOWN"
         label="▼"
         activeDirection={activeDirection}
         style={styles.dpadDown}
-        onPressIn={pressDirection("DOWN")}
-        onPressOut={releaseDirection("DOWN")}
       />
       <View style={styles.dpadCenter} />
     </View>
@@ -289,32 +503,26 @@ function DPadButton({
   label,
   activeDirection,
   style,
-  onPressIn,
-  onPressOut,
 }: {
   direction: DPadDirection;
   label: string;
   activeDirection: DPadDirection | null;
   style: object;
-  onPressIn: () => void;
-  onPressOut: () => void;
 }) {
   const isActive = activeDirection === direction;
   return (
-    <Pressable
+    <View
       accessible
       accessibilityLabel={`${direction.toLowerCase()} D-pad`}
       accessibilityRole="button"
-      onPressIn={onPressIn}
-      onPressOut={onPressOut}
-      style={({ pressed }) => [
+      style={[
         styles.dpadButton,
         style,
-        (pressed || isActive) && styles.dpadButtonActive,
+        isActive && styles.dpadButtonActive,
       ]}
     >
       <Text style={styles.dpadText}>{label}</Text>
-    </Pressable>
+    </View>
   );
 }
 

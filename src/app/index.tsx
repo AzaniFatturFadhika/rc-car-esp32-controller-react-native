@@ -30,8 +30,7 @@ import {
     buttonIsActive,
     DigitalButton,
     DPad,
-    getActionVariant,
-    useDualStickGestures
+    getActionVariant
 } from "@/features/gamepad/gamepad-controls";
 import {
     encodeGamepadPayload,
@@ -50,6 +49,7 @@ import {
     EMPTY_GAMEPAD_STATE,
 } from "@/features/gamepad/types";
 import { useWifiTransport } from "@/features/gamepad/use-wifi-transport";
+import { MultiTouchProvider } from "@/hooks/useMultiTouch";
 
 // ─── Reducer ─────────────────────────────────────────────────────────────────
 
@@ -103,8 +103,7 @@ export default function GamepadScreen() {
   const [connectionSettings, setConnectionSettings] =
     useState<ConnectionSettings>(DEFAULT_CONNECTION_SETTINGS);
 
-  // Two linked pan gestures for simultaneous dual-stick multi-touch on Android.
-  const stickGestures = useDualStickGestures();
+
 
   // Session timer
   const [sessionSeconds, setSessionSeconds] = useState(0);
@@ -222,7 +221,10 @@ export default function GamepadScreen() {
 
   return (
     <GestureHandlerRootView style={styles.root}>
-      <View style={styles.background}>
+      <MultiTouchProvider
+        enabled={!settingsVisible}
+        style={styles.background}
+      >
         <SafeAreaView
           style={styles.safeArea}
           edges={["left", "right", "bottom"]}
@@ -404,7 +406,7 @@ export default function GamepadScreen() {
             </View>
           </View>
         </SafeAreaView>
-    </View>
+      </MultiTouchProvider>
 
       <SettingsSheet
         visible={settingsVisible}
