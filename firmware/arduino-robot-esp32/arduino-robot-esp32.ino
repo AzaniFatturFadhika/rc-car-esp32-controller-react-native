@@ -387,6 +387,22 @@ void parseAndEnqueue(uint8_t* payload, size_t length, uint8_t source) {
   
   const char* type = doc["type"] | "";
   
+  // Auth handling (terutama untuk BLE)
+  if (strcmp(type, "AUTH") == 0) {
+    const char* token = doc["token"] | "";
+    JsonDocument resp;
+    resp["type"] = "AUTH_STATUS";
+    if (strcmp(token, AUTH_TOKEN) == 0) {
+      resp["status"] = "OK";
+    } else {
+      resp["status"] = "FAILED";
+    }
+    char buffer[128];
+    size_t len = serializeJson(resp, buffer);
+    sendToClients(buffer, len, source);
+    return;
+  }
+  
   // Heartbeat
   if (strcmp(type, "HEARTBEAT") == 0) {
     lastHeartbeat = millis();
