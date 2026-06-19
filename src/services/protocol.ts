@@ -2,7 +2,7 @@
 export type OutgoingMessage = 
   | { type: 'AUTH'; token: string }
   | { type: 'HEARTBEAT' }
-  | { type: 'CMD'; lx: number; ly: number; dpad: string };
+  | { type: 'CMD'; lx: number; ly: number; rx: number; ry: number; dpad: string };
 
 // Tipe pesan dari ESP32 ke App
 export type IncomingMessage =
@@ -32,10 +32,18 @@ export const createHeartbeatMessage = (): OutgoingMessage => ({
   type: 'HEARTBEAT',
 });
 
-export const createCommandMessage = (lx: number, ly: number, dpad: string = ''): OutgoingMessage => ({
+export const createCommandMessage = (
+  lx: number,
+  ly: number,
+  rx: number = 0,
+  ry: number = 0,
+  dpad: string = ''
+): OutgoingMessage => ({
   type: 'CMD',
   lx: Math.round(lx),
   ly: Math.round(ly),
+  rx: Math.round(rx),
+  ry: Math.round(ry),
   dpad,
 });
 

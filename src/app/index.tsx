@@ -122,9 +122,17 @@ export default function GamepadScreen() {
       type: "CMD",
       lx: Math.round(gamepadState.leftStick.x),
       ly: Math.round(gamepadState.leftStick.y),
+      rx: Math.round(gamepadState.rightStick.x),
+      ry: Math.round(gamepadState.rightStick.y),
       dpad: gamepadState.dpad || "",
     });
-  }, [gamepadState.leftStick.x, gamepadState.leftStick.y, gamepadState.dpad]);
+  }, [
+    gamepadState.leftStick.x,
+    gamepadState.leftStick.y,
+    gamepadState.rightStick.x,
+    gamepadState.rightStick.y,
+    gamepadState.dpad
+  ]);
 
   // Throttled sender loop
   const lastSentAtRef = useRef(0);
@@ -140,12 +148,20 @@ export default function GamepadScreen() {
       sendTimerRef.current = null;
       const lx = gamepadState.leftStick.x;
       const ly = gamepadState.leftStick.y;
+      const rx = gamepadState.rightStick.x;
+      const ry = gamepadState.rightStick.y;
       const dpad = gamepadState.dpad || '';
 
-      useConnectionStore.getState().sendCommand(lx, ly, dpad);
+      useConnectionStore.getState().sendCommand(lx, ly, rx, ry, dpad);
       lastSentAtRef.current = Date.now();
     }, wait);
-  }, [gamepadState.leftStick.x, gamepadState.leftStick.y, gamepadState.dpad]);
+  }, [
+    gamepadState.leftStick.x,
+    gamepadState.leftStick.y,
+    gamepadState.rightStick.x,
+    gamepadState.rightStick.y,
+    gamepadState.dpad
+  ]);
 
   useEffect(() => {
     scheduleSendCommand();

@@ -21,7 +21,7 @@ interface ConnectionStoreState {
   connectWiFi: (host: string, port: number) => Promise<void>;
   connectBLE: (deviceId: string, deviceName: string) => Promise<void>;
   disconnect: () => void;
-  sendCommand: (lx: number, ly: number, dpad?: string) => void;
+  sendCommand: (lx: number, ly: number, rx?: number, ry?: number, dpad?: string) => void;
   clearError: () => void;
 }
 
@@ -62,7 +62,7 @@ export const useConnectionStore = create<ConnectionStoreState>((set, get) => ({
     });
   },
 
-  sendCommand: (lx, ly, dpad = '') => {
+  sendCommand: (lx, ly, rx = 0, ry = 0, dpad = '') => {
     const { isAuthenticated } = get();
     // Only allow commands if authenticated (or simulated connection)
     if (!isAuthenticated) {
@@ -73,6 +73,8 @@ export const useConnectionStore = create<ConnectionStoreState>((set, get) => ({
       type: 'CMD',
       lx: Math.round(lx),
       ly: Math.round(ly),
+      rx: Math.round(rx),
+      ry: Math.round(ry),
       dpad,
     });
   },

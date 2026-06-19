@@ -64,6 +64,8 @@ const TickType_t PID_PERIOD_TICKS = pdMS_TO_TICKS(20);
 struct GamepadCommand {
   int lx;
   int ly;
+  int rx;
+  int ry;
   char dpad[8];
 };
 
@@ -193,9 +195,11 @@ void setMotorSpeeds(float pwmL, float pwmR) {
   ledcWrite(ENB, dutyR);
 }
 
-void driveKinematics(int lx, int ly, const char* dpad, int &targetL, int &targetR) {
+void driveKinematics(int lx, int ly, int rx, int ry, const char* dpad, int &targetL, int &targetR) {
   if (abs(lx) < DEADZONE) lx = 0;
   if (abs(ly) < DEADZONE) ly = 0;
+  if (abs(rx) < DEADZONE) rx = 0;
+  if (abs(ry) < DEADZONE) ry = 0;
 
   if (strlen(dpad) > 0) {
     if (strcmp(dpad, "UP") == 0)        { targetL = 100; targetR = 100; }
@@ -205,11 +209,27 @@ void driveKinematics(int lx, int ly, const char* dpad, int &targetL, int &target
     return;
   }
 
-  if (lx != 0 || ly != 0) {
-    int forward = -ly; 
-    int turn = -lx;     
-    targetL = constrain(forward + turn, -100, 100);
-    targetR = constrain(forward - turn, -100, 100);
+  // 1. Right analog stick rotation/spin in place (zero-radius turn) takes priority
+  if (rx != 0) {
+    targetL = rx;
+    targetR = -rx;
+  }
+  // 2. Left analog stick forward/backward and pivot steering
+  else if (lx != 0 || ly != 0) {
+    int forward = -ly; // ly is negative for forward, positive for backward
+    if (lx > 0) {
+      // Steer right: scale down right motor (pivot)
+      targetL = forward;
+      targetR = forward * (100 - lx) / 100;
+    } else if (lx < 0) {
+      // Steer left: scale down left motor (pivot)
+      targetL = forward * (100 + lx) / 100;
+      targetR = forward;
+    } else {
+      // Straight
+      targetL = forward;
+      targetR = forward;
+    }
   } else {
     targetL = 0; targetR = 0;
   }
@@ -310,7 +330,7 @@ void motorControlTask(void *pvParameters) {
 
     int rawTargetL = 0, rawTargetR = 0;
     if (millis() - lastCommandTime < WATCHDOG_TIMEOUT) {
-      driveKinematics(receivedCmd.lx, receivedCmd.ly, receivedCmd.dpad, rawTargetL, rawTargetR);
+      driveKinematics(receivedCmd.lx, receivedCmd.ly, receivedCmd.rx, receivedCmd.ry, receivedCmd.dpad, rawTargetL, rawTargetR);
     } else {
       rawTargetL = 0; rawTargetR = 0;
       pidLeft.reset(); pidRight.reset(); 
@@ -422,6 +442,8 @@ void parseAndEnqueue(uint8_t* payload, size_t length, uint8_t source) {
     GamepadCommand cmd;
     cmd.lx = doc["lx"] | 0;
     cmd.ly = doc["ly"] | 0;
+    cmd.rx = doc["rx"] | 0;
+    cmd.ry = doc["ry"] | 0;
     const char* dpad = doc["dpad"] | "";
     strlcpy(cmd.dpad, dpad, sizeof(cmd.dpad));
     

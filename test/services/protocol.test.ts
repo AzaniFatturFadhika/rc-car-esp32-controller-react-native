@@ -17,11 +17,13 @@ describe("Protocol Services", () => {
   });
 
   it("creates correct CMD message", () => {
-    const msg = createCommandMessage(50.4, -30.7, "UP");
+    const msg = createCommandMessage(50.4, -30.7, 0, 0, "UP");
     expect(msg).toEqual({
       type: "CMD",
       lx: 50,
       ly: -31,
+      rx: 0,
+      ry: 0,
       dpad: "UP",
     });
   });
