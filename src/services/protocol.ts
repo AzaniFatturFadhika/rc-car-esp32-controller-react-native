@@ -2,13 +2,17 @@
 export type OutgoingMessage = 
   | { type: 'AUTH'; token: string }
   | { type: 'HEARTBEAT' }
+  | { type: 'HB' }
   | { type: 'CMD'; lx: number; ly: number; rx: number; ry: number; dpad: string };
 
 // Tipe pesan dari ESP32 ke App
 export type IncomingMessage =
   | { type: 'TELEMETRY'; speedL: number; speedR: number }
+  | { type: 'TEL'; l: number; r: number }
   | { type: 'ACK'; cmd: string; status: string }
   | { type: 'AUTH_REQUIRED' }
+  | { type: 'AUTH_REQ' }
+  | { type: 'AUTH'; ok: boolean }
   | { type: 'AUTH_STATUS'; status: 'OK' | 'FAILED' };
 
 // Konstanta konfigurasi
@@ -32,6 +36,10 @@ export const createHeartbeatMessage = (): OutgoingMessage => ({
   type: 'HEARTBEAT',
 });
 
+export const createBinaryHeartbeatMessage = () => ({
+  type: 'HB' as const,
+});
+
 export const createCommandMessage = (
   lx: number,
   ly: number,
@@ -46,6 +54,55 @@ export const createCommandMessage = (
   ry: Math.round(ry),
   dpad,
 });
+
+/**
+ * Packs gamepad control state into a 7-byte binary command struct
+ * compliant with ESP32 BinaryCmd protocol.
+ */
+export const buildBinaryCommand = (
+  lx: number,
+  ly: number,
+  rx: number = 0,
+  ry: number = 0,
+  dpad: string = ''
+): Uint8Array => {
+  const clamp = (val: number) => Math.max(-100, Math.min(100, Math.round(val)));
+  const cLx = clamp(lx);
+  const cLy = clamp(ly);
+  const cRx = clamp(rx);
+  const cRy = clamp(ry);
+
+  // Map D-pad string to uint8: 0=None, 1=Up, 2=Down, 3=Left, 4=Right
+  let dpadVal = 0;
+  if (dpad === 'UP') dpadVal = 1;
+  else if (dpad === 'DOWN') dpadVal = 2;
+  else if (dpad === 'LEFT') dpadVal = 3;
+  else if (dpad === 'RIGHT') dpadVal = 4;
+
+  const buffer = new ArrayBuffer(7);
+  const view = new DataView(buffer);
+
+  view.setUint8(0, 0xAA);  // Header
+  view.setInt8(1, cLx);    // Left X
+  view.setInt8(2, cLy);    // Left Y
+  view.setInt8(3, cRx);    // Right X
+  view.setInt8(4, cRy);    // Right Y
+  view.setUint8(5, dpadVal); // D-pad
+
+  // XOR Checksum of bytes 0 to 5
+  const checksum = (
+    0xAA ^
+    (cLx & 0xFF) ^
+    (cLy & 0xFF) ^
+    (cRx & 0xFF) ^
+    (cRy & 0xFF) ^
+    (dpadVal & 0xFF)
+  ) & 0xFF;
+  
+  view.setUint8(6, checksum);
+
+  return new Uint8Array(buffer);
+};
 
 // Parser untuk pesan masuk
 export const parseIncomingMessage = (data: string): IncomingMessage | null => {

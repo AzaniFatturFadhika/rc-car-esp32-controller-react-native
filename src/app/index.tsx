@@ -45,6 +45,7 @@ import {
     EMPTY_GAMEPAD_STATE,
 } from "@/features/gamepad/types";
 import { useConnectionStore } from "@/store/connectionStore";
+import { buildBinaryCommand } from "@/services/protocol";
 import { TelemetryDisplay } from "@/features/gamepad/telemetry-display";
 import { MultiTouchProvider } from "@/hooks/useMultiTouch";
 
@@ -113,25 +114,41 @@ export default function GamepadScreen() {
     rssi,
     connectWiFi,
     connectBLE,
-    disconnect
+    disconnect,
+    isBinaryProtocol
   } = useConnectionStore();
 
   // Serialise payload only when state changes.
   const payloadMessage = useMemo(() => {
+    const lx = Math.round(gamepadState.leftStick.x);
+    const ly = Math.round(gamepadState.leftStick.y);
+    const rx = Math.round(gamepadState.rightStick.x);
+    const ry = Math.round(gamepadState.rightStick.y);
+    const dpad = gamepadState.dpad || "";
+
+    if (isBinaryProtocol) {
+      const cmd = buildBinaryCommand(lx, ly, rx, ry, dpad);
+      const hex = Array.from(cmd)
+        .map((b) => b.toString(16).padStart(2, "0").toUpperCase())
+        .join(" ");
+      return `BIN: ${hex}`;
+    }
+
     return JSON.stringify({
       type: "CMD",
-      lx: Math.round(gamepadState.leftStick.x),
-      ly: Math.round(gamepadState.leftStick.y),
-      rx: Math.round(gamepadState.rightStick.x),
-      ry: Math.round(gamepadState.rightStick.y),
-      dpad: gamepadState.dpad || "",
+      lx,
+      ly,
+      rx,
+      ry,
+      dpad,
     });
   }, [
     gamepadState.leftStick.x,
     gamepadState.leftStick.y,
     gamepadState.rightStick.x,
     gamepadState.rightStick.y,
-    gamepadState.dpad
+    gamepadState.dpad,
+    isBinaryProtocol
   ]);
 
   // Throttled sender loop

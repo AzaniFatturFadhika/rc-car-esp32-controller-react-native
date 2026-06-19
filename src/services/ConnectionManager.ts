@@ -1,6 +1,6 @@
 import { BleManager, Device } from 'react-native-ble-plx';
 import { Platform, PermissionsAndroid } from 'react-native';
-import { CONFIG, createAuthMessage, createHeartbeatMessage } from './protocol';
+import { CONFIG, createAuthMessage, createHeartbeatMessage, createBinaryHeartbeatMessage } from './protocol';
 import { Buffer } from 'buffer';
 
 export async function requestBluetoothPermissions(): Promise<boolean> {
@@ -85,6 +85,7 @@ export class ConnectionManager {
   public isAuthenticated: boolean = false;
   public isBleSupported: boolean = false;
   public isSimulatedBLE: boolean = false;
+  public isBinaryProtocol: boolean = false;
   
   private currentHost: string = '';
   private currentPort: number = 81;
@@ -252,6 +253,12 @@ export class ConnectionManager {
       
       await this.bleDevice.discoverAllServicesAndCharacteristics();
       
+      // Request larger MTU on Android to prevent packet fragmentation/truncation
+      if (Platform.OS === 'android') {
+        console.log('Requesting MTU size 512 for Android...');
+        await this.bleDevice.requestMTU(512).catch(err => console.warn('MTU request failed:', err));
+      }
+      
       // Setup listener on Nordic UART Service TX characteristic
       this.bleDevice.monitorCharacteristicForService(
         CONFIG.BLE_SERVICE_UUID,
@@ -339,10 +346,37 @@ export class ConnectionManager {
       const sanitized = data.replace(/\0/g, '').trim();
       const message = JSON.parse(sanitized);
       if (!message || typeof message !== 'object') return;
+
+      // Auto-detect binary protocol based on message shapes
+      if (
+        message.type === 'AUTH_REQ' ||
+        message.type === 'TEL' ||
+        (message.type === 'AUTH' && message.ok !== undefined)
+      ) {
+        if (!this.isBinaryProtocol) {
+          console.log('Binary protocol detected from ESP32 payload.');
+          this.isBinaryProtocol = true;
+          this.onStatusChange?.(this.connectionStatus, this.connectionType);
+        }
+      } else if (
+        message.type === 'AUTH_REQUIRED' ||
+        message.type === 'AUTH_STATUS' ||
+        message.type === 'TELEMETRY'
+      ) {
+        if (this.isBinaryProtocol) {
+          console.log('Legacy protocol detected from ESP32 payload.');
+          this.isBinaryProtocol = false;
+          this.onStatusChange?.(this.connectionStatus, this.connectionType);
+        }
+      }
       
       // Handle AUTH responses
-      if (message.type === 'AUTH_STATUS') {
-        if (message.status === 'OK') {
+      if (message.type === 'AUTH_STATUS' || message.type === 'AUTH') {
+        const isSuccess = message.type === 'AUTH_STATUS'
+          ? message.status === 'OK'
+          : message.ok === true;
+
+        if (isSuccess) {
           console.log('Authentication successful!');
           this.isAuthenticated = true;
           this.connectionStatus = 'connected';
@@ -359,7 +393,7 @@ export class ConnectionManager {
       }
 
       // Handle AUTH_REQUIRED
-      if (message.type === 'AUTH_REQUIRED') {
+      if (message.type === 'AUTH_REQUIRED' || message.type === 'AUTH_REQ') {
         this.sendMessage(createAuthMessage());
         return;
       }
@@ -367,7 +401,7 @@ export class ConnectionManager {
       // Reset missed heartbeats on any valid response
       this.missedHeartbeats = 0;
 
-      // Forward other messages (e.g. TELEMETRY, ACK) to callback
+      // Forward other messages (e.g. TELEMETRY, TEL, ACK) to callback
       this.onMessage?.(message);
     } catch {
       // Ignore parse errors from partial/malformed frames
@@ -377,11 +411,16 @@ export class ConnectionManager {
   // ==================== SEND MESSAGE ====================
   sendMessage(message: any): boolean {
     try {
-      const data = JSON.stringify(message);
+      const isBinary = message instanceof ArrayBuffer || ArrayBuffer.isView(message);
       
       if (this.connectionType === 'wifi') {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-          this.ws.send(data);
+          if (isBinary) {
+            this.ws.send(message);
+          } else {
+            const data = JSON.stringify(message);
+            this.ws.send(data);
+          }
           return true;
         }
         return false;
@@ -394,14 +433,43 @@ export class ConnectionManager {
         }
         
         if (this.bleDevice) {
-          const base64Data = Buffer.from(data).toString('base64');
-          this.bleDevice.writeCharacteristicWithoutResponseForService(
-            CONFIG.BLE_SERVICE_UUID,
-            CONFIG.BLE_RX_UUID,
-            base64Data
-          ).catch((error) => {
-            console.warn('BLE write error:', error);
-          });
+          let base64Data: string;
+          if (isBinary) {
+            const bytes = message instanceof ArrayBuffer
+              ? new Uint8Array(message)
+              : new Uint8Array(message.buffer, message.byteOffset, message.byteLength);
+            base64Data = Buffer.from(bytes).toString('base64');
+            
+            this.bleDevice.writeCharacteristicWithoutResponseForService(
+              CONFIG.BLE_SERVICE_UUID,
+              CONFIG.BLE_RX_UUID,
+              base64Data
+            ).catch((error) => {
+              console.warn('BLE write error:', error);
+            });
+          } else {
+            const data = JSON.stringify(message);
+            base64Data = Buffer.from(data).toString('base64');
+            
+            // For AUTH messages (which are larger than standard MTU), write with response to ensure it isn't fragmented/truncated.
+            if (message.type === 'AUTH') {
+              this.bleDevice.writeCharacteristicWithResponseForService(
+                CONFIG.BLE_SERVICE_UUID,
+                CONFIG.BLE_RX_UUID,
+                base64Data
+              ).catch((error) => {
+                console.warn('BLE write with response (AUTH) error:', error);
+              });
+            } else {
+              this.bleDevice.writeCharacteristicWithoutResponseForService(
+                CONFIG.BLE_SERVICE_UUID,
+                CONFIG.BLE_RX_UUID,
+                base64Data
+              ).catch((error) => {
+                console.warn('BLE write error:', error);
+              });
+            }
+          }
           return true;
         }
         return false;
@@ -420,7 +488,11 @@ export class ConnectionManager {
     this.heartbeatInterval = setInterval(() => {
       if (this.connectionStatus !== 'connected') return;
 
-      const sent = this.sendMessage(createHeartbeatMessage());
+      const hbMsg = this.isBinaryProtocol
+        ? createBinaryHeartbeatMessage()
+        : createHeartbeatMessage();
+
+      const sent = this.sendMessage(hbMsg);
       if (!sent && !this.isSimulatedBLE) {
         this.missedHeartbeats++;
         if (this.missedHeartbeats >= this.maxMissedHeartbeats) {
@@ -492,6 +564,7 @@ export class ConnectionManager {
     this.connectionStatus = 'disconnected';
     this.isAuthenticated = false;
     this.isSimulatedBLE = false;
+    this.isBinaryProtocol = false;
     this.reconnectAttempts = 0;
     this.missedHeartbeats = 0;
     

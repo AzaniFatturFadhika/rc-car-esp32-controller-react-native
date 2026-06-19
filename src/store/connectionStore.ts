@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { connectionManager, ConnectionType, ConnectionStatus } from '../services/ConnectionManager';
+import { buildBinaryCommand } from '../services/protocol';
 
 export interface TelemetryData {
   speedL: number;
@@ -11,6 +12,7 @@ interface ConnectionStoreState {
   connectionType: ConnectionType;
   connectionStatus: ConnectionStatus;
   isAuthenticated: boolean;
+  isBinaryProtocol: boolean;
   errorMessage: string | null;
   rssi: number | null;
   
@@ -29,6 +31,7 @@ export const useConnectionStore = create<ConnectionStoreState>((set, get) => ({
   connectionType: 'none',
   connectionStatus: 'disconnected',
   isAuthenticated: false,
+  isBinaryProtocol: false,
   errorMessage: null,
   rssi: null,
   telemetry: { speedL: 0, speedR: 0 },
@@ -57,6 +60,7 @@ export const useConnectionStore = create<ConnectionStoreState>((set, get) => ({
       connectionType: 'none',
       connectionStatus: 'disconnected',
       isAuthenticated: false,
+      isBinaryProtocol: false,
       rssi: null,
       telemetry: { speedL: 0, speedR: 0 }
     });
@@ -69,14 +73,19 @@ export const useConnectionStore = create<ConnectionStoreState>((set, get) => ({
       return;
     }
     
-    connectionManager.sendMessage({
-      type: 'CMD',
-      lx: Math.round(lx),
-      ly: Math.round(ly),
-      rx: Math.round(rx),
-      ry: Math.round(ry),
-      dpad,
-    });
+    if (connectionManager.isBinaryProtocol) {
+      const binaryCmd = buildBinaryCommand(lx, ly, rx, ry, dpad);
+      connectionManager.sendMessage(binaryCmd);
+    } else {
+      connectionManager.sendMessage({
+        type: 'CMD',
+        lx: Math.round(lx),
+        ly: Math.round(ly),
+        rx: Math.round(rx),
+        ry: Math.round(ry),
+        dpad,
+      });
+    }
   },
 
   clearError: () => {
@@ -90,15 +99,18 @@ connectionManager.onStatusChange = (status, type) => {
     connectionStatus: status,
     connectionType: type,
     isAuthenticated: connectionManager.isAuthenticated,
+    isBinaryProtocol: connectionManager.isBinaryProtocol,
   });
 };
 
 connectionManager.onMessage = (message) => {
-  if (message.type === 'TELEMETRY') {
+  if (message.type === 'TELEMETRY' || message.type === 'TEL') {
+    const speedL = message.type === 'TEL' ? (message.l ?? 0) : (message.speedL ?? 0);
+    const speedR = message.type === 'TEL' ? (message.r ?? 0) : (message.speedR ?? 0);
     useConnectionStore.setState({
       telemetry: {
-        speedL: message.speedL ?? 0,
-        speedR: message.speedR ?? 0,
+        speedL,
+        speedR,
       }
     });
   }
