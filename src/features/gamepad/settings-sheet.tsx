@@ -129,10 +129,11 @@ export const SettingsSheet = memo(function SettingsSheet({
           return;
         }
 
-        if (device && device.name) {
+        if (device) {
+          const displayName = device.name || device.localName || `Unknown Device (${device.id})`;
           setDevices((prev) => {
             if (prev.some((d) => d.id === device.id)) return prev;
-            return [...prev, { id: device.id, name: device.name || "Unknown Device" }];
+            return [...prev, { id: device.id, name: displayName }];
           });
         }
       });

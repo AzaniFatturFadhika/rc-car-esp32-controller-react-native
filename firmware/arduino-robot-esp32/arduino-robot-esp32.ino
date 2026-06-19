@@ -207,7 +207,7 @@ void driveKinematics(int lx, int ly, const char* dpad, int &targetL, int &target
 
   if (lx != 0 || ly != 0) {
     int forward = -ly; 
-    int turn = lx;     
+    int turn = -lx;     
     targetL = constrain(forward + turn, -100, 100);
     targetR = constrain(forward - turn, -100, 100);
   } else {
@@ -527,7 +527,11 @@ void setup() {
   );
   
   pService->start();
-  NimBLEDevice::getAdvertising()->start();
+  
+  NimBLEAdvertising *pAdvertising = NimBLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->start();
   
   // OTA Setup
   ArduinoOTA.setHostname(WIFI_SSID);
