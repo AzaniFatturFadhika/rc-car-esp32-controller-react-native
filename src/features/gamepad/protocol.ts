@@ -15,7 +15,7 @@ export function serializeGamepadPayload(state: GamepadState): GamepadPayload {
     RX: clampAxis(state.rightStick.x),
     RY: clampAxis(state.rightStick.y),
     BTN: activeButtons,
-    DPAD: state.dpad,
+    DPAD: state.dpad || '',
   };
 }
 

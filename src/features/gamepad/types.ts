@@ -22,7 +22,7 @@ export type GamepadPayload = {
   RX: number;
   RY: number;
   BTN: ButtonId[];
-  DPAD: DPadDirection | null;
+  DPAD: DPadDirection | '';
 };
 
 export type ConnectionMode = 'wifi' | 'bluetooth';

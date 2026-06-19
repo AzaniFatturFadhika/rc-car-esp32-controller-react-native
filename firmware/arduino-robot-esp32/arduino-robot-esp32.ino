@@ -1,28 +1,12 @@
 #include <WiFi.h>
 #include <WebSocketsServer.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
-#include <ArduinoJson.h>
+#include <NimBLEDevice.h> // POIN A: Beralih ke NimBLE (Jauh lebih ringan & stabil di Core 3.x)
+#include <ArduinoJson.h>  // POIN B: Pastikan menggunakan ArduinoJson v7
 
 // ============================================================
-// KONFIGURASI WI-FI (Access Point)
+// DEFINISI & KONFIGURASI HARDWARE
 // ============================================================
-const char* AP_SSID     = "ESP32-Robot";
-const char* AP_PASSWORD = "12345678"; // Minimal 8 karakter
-const int WS_PORT = 81;
-
-// ============================================================
-// KONFIGURASI BLUETOOTH BLE (Nordic UART Service)
-// ============================================================
-#define BLE_DEVICE_NAME        "ESP32-Gamepad"
-#define SERVICE_UUID           "6e400001-b5a3-f393-e0a9-e50e24dcca9e" // NUS Service
-#define RX_CHARACTERISTIC_UUID "6e400002-b5a3-f393-e0a9-e50e24dcca9e" // Writable (Phone to Robot)
-
-// ============================================================
-// KONFIGURASI MOTOR PINS (L298N)
-// ============================================================
+// Motor Driver Pins
 #define ENA 14
 #define ENB 13
 #define IN1 27
@@ -30,172 +14,266 @@ const int WS_PORT = 81;
 #define IN3 25
 #define IN4 33
 
-const unsigned long WATCHDOG_TIMEOUT_MS = 500;
+// Encoder Pins (Quadrature Encoders)
+#define ENC_L_A 18
+#define ENC_L_B 19
+#define ENC_R_A 21
+#define ENC_R_B 22
+
+// PWM Config
+const int PWM_FREQ = 2000;       
+const int PWM_RESOLUTION = 8;    // 0 - 255
+
+// Kinematics & Control Config
+const int DEADZONE = 15;         // POIN C: Deadzone untuk atasi joystick drift (0-100)
+const float SMOOTHING_ALPHA = 0.15; // POIN D: Faktor smoothing (0.0 - 1.0). Lebih kecil = lebih halus tapi lambat respons.
+const float MAX_TICKS_PER_SEC = 150.0; // Kalibrasi: Berapa ticks/detik pada PWM 100%? (Sesuaikan dengan motor Anda)
+
+// PID Config (Tuning nilai ini sesuai karakteristik motor Anda)
+const float KP = 1.5;  
+const float KI = 3.0;  
+const float KD = 0.05; 
 
 // ============================================================
-// VARIABEL GLOBAL
+// STRUKTUR DATA & PID CONTROLLER
 // ============================================================
-WebSocketsServer webSocket(WS_PORT);
-BLEServer *pServer = NULL;
-bool wifiClientConnected = false;
-bool bleClientConnected = false;
-unsigned long lastPacketMs = 0;
+struct GamepadCommand {
+  int lx;
+  int ly;
+  char dpad[8];
+};
+
+// Implementasi PID Controller Manual (Lebih fleksibel & tanpa dependensi library eksternal)
+struct PIDController {
+    float Kp, Ki, Kd;
+    float integral, prevError;
+    float outMin, outMax;
+
+    PIDController(float p, float i, float d, float min, float max) 
+        : Kp(p), Ki(i), Kd(d), integral(0), prevError(0), outMin(min), outMax(max) {}
+
+    float compute(float setpoint, float measurement, float dt) {
+        if (dt <= 0) return 0;
+        float error = setpoint - measurement;
+        
+        // Integrasi dengan Anti-Windup
+        integral += error * dt;
+        integral = constrain(integral, outMin / Ki, outMax / Ki); 
+        
+        // Derivatif
+        float derivative = (error - prevError) / dt;
+        prevError = error;
+        
+        // Hitung Output
+        float output = Kp * error + Ki * integral + Kd * derivative;
+        return constrain(output, outMin, outMax);
+    }
+    
+    void reset() { integral = 0; prevError = 0; }
+};
+
+// FreeRTOS Queue Handle
+QueueHandle_t commandQueue;
+
+// Jaringan & BLE Global
+WebSocketsServer webSocket(81);
+NimBLEServer *pServer = NULL;
+
+// Variabel Global untuk Encoder & PID
+volatile int32_t encoderLeftTicks = 0;
+volatile int32_t encoderRightTicks = 0;
+PIDController pidLeft(KP, KI, KD, -255, 255);
+PIDController pidRight(KP, KI, KD, -255, 255);
 
 // ============================================================
-// FUNGSI MOTOR
+// INTERRUPT SERVICE ROUTINES (ENCODER)
 // ============================================================
-void setupMotors() {
-  pinMode(ENA, OUTPUT);
-  pinMode(ENB, OUTPUT);
-  pinMode(IN1, OUTPUT);
-  pinMode(IN2, OUTPUT);
-  pinMode(IN3, OUTPUT);
-  pinMode(IN4, OUTPUT);
+void IRAM_ATTR readEncoderLeft() {
+  // Baca state pin B saat pin A trigger (Rising edge)
+  if (digitalRead(ENC_L_A) == digitalRead(ENC_L_B)) encoderLeftTicks++;
+  else encoderLeftTicks--;
 }
 
-// Fungsi dasar motor dengan input kecepatan PWM (-255 s/d 255)
-void setMotor(int speedL, int speedR) {
+void IRAM_ATTR readEncoderRight() {
+  if (digitalRead(ENC_R_A) == digitalRead(ENC_R_B)) encoderRightTicks++;
+  else encoderRightTicks--;
+}
+
+// ============================================================
+// DRIVER MOTOR & KINEMATIKA
+// ============================================================
+void initMotors() {
+  pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT);
+  
+  pinMode(ENC_L_A, INPUT_PULLUP); pinMode(ENC_L_B, INPUT_PULLUP);
+  pinMode(ENC_R_A, INPUT_PULLUP); pinMode(ENC_R_B, INPUT_PULLUP);
+
+  ledcAttach(ENA, PWM_FREQ, PWM_RESOLUTION);
+  ledcAttach(ENB, PWM_FREQ, PWM_RESOLUTION);
+
+  // Attach Interrupts untuk Encoder
+  attachInterrupt(digitalPinToInterrupt(ENC_L_A), readEncoderLeft, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENC_R_A), readEncoderRight, CHANGE);
+}
+
+void setMotorSpeeds(float pwmL, float pwmR) {
+  int dutyL = constrain(abs(pwmL), 0, 255);
+  int dutyR = constrain(abs(pwmR), 0, 255);
+
   // Motor Kiri
-  if (speedL >= 0) {
-    digitalWrite(IN1, HIGH);
-    digitalWrite(IN2, LOW);
-    analogWrite(ENA, speedL);
-  } else {
-    digitalWrite(IN1, LOW);
-    digitalWrite(IN2, HIGH);
-    analogWrite(ENA, abs(speedL));
-  }
+  if (pwmL >= 0) { digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW); } 
+  else { digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH); }
+  ledcWrite(ENA, dutyL);
 
   // Motor Kanan
-  if (speedR >= 0) {
-    digitalWrite(IN3, HIGH);
-    digitalWrite(IN4, LOW);
-    analogWrite(ENB, speedR);
-  } else {
-    digitalWrite(IN3, LOW);
-    digitalWrite(IN4, HIGH);
-    analogWrite(ENB, abs(speedR));
-  }
+  if (pwmR >= 0) { digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW); } 
+  else { digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH); }
+  ledcWrite(ENB, dutyR);
 }
 
-void applyMotorControl(int lx, int ly) {
-  // Differential drive (tank steering):
-  // LY = maju/mundur (karena di layar negatif = atas, maka kita invert)
-  // LX = belok kiri/kanan (positif = kanan)
-  int forward = -ly; 
-  int turn = lx;     
-  
-  int leftSpeed  = constrain(forward + turn, -100, 100);
-  int rightSpeed = constrain(forward - turn, -100, 100);
+// POIN C: Implementasi Deadzone di sini
+void driveKinematics(int lx, int ly, const char* dpad, int &targetL, int &targetR) {
+  // Terapkan Deadzone pada Analog Stick
+  if (abs(lx) < DEADZONE) lx = 0;
+  if (abs(ly) < DEADZONE) ly = 0;
 
-  // Konversi -100...100 ke PWM -255...255
-  int leftPwm  = map(leftSpeed,  -100, 100, -255, 255);
-  int rightPwm = map(rightSpeed, -100, 100, -255, 255);
-
-  setMotor(leftPwm, rightPwm);
-}
-
-void stopAllMotors() {
-  setMotor(0, 0);
-}
-
-// ============================================================
-// HANDLER D-PAD (Gerak diskret)
-// ============================================================
-void applyDpad(const char* dpad) {
-  if (strcmp(dpad, "UP") == 0) {
-    setMotor(255, 255);
-  } else if (strcmp(dpad, "DOWN") == 0) {
-    setMotor(-255, -255);
-  } else if (strcmp(dpad, "LEFT") == 0) {
-    setMotor(-200, 200);
-  } else if (strcmp(dpad, "RIGHT") == 0) {
-    setMotor(200, -200);
-  }
-}
-
-// ============================================================
-// PARSER PAYLOAD GAMEPAD UNTUK WI-FI & BLE
-// ============================================================
-void processGamepadCommand(uint8_t* payload, size_t length, const char* source) {
-  StaticJsonDocument<256> doc;
-  DeserializationError err = deserializeJson(doc, payload, length);
-
-  if (err) {
-    Serial.printf("[%s] JSON error: %s\n", source, err.c_str());
+  if (strlen(dpad) > 0) {
+    if (strcmp(dpad, "UP") == 0)        { targetL = 100; targetR = 100; }
+    else if (strcmp(dpad, "DOWN") == 0)  { targetL = -100; targetR = -100; }
+    else if (strcmp(dpad, "LEFT") == 0)  { targetL = -80; targetR = 80; }
+    else if (strcmp(dpad, "RIGHT") == 0) { targetL = 80; targetR = -80; }
     return;
   }
 
-  lastPacketMs = millis();
-
-  int lx = doc["LX"] | 0;
-  int ly = doc["LY"] | 0;
-
-  // Prioritas 1: Kontrol analog jika stick digerakkan
   if (lx != 0 || ly != 0) {
-    applyMotorControl(lx, ly);
-  } 
-  // Prioritas 2: D-Pad jika stick analog sedang di tengah
-  else if (doc.containsKey("DPAD") && !doc["DPAD"].isNull()) {
-    const char* dpad = doc["DPAD"];
-    applyDpad(dpad);
-  } 
-  // Jika keduanya tidak disentuh, stop
-  else {
-    stopAllMotors();
+    int forward = -ly; 
+    int turn = lx;     
+    targetL = constrain(forward + turn, -100, 100);
+    targetR = constrain(forward - turn, -100, 100);
+  } else {
+    targetL = 0; targetR = 0;
   }
 }
 
 // ============================================================
-// CALLBACKS WEBSOCKET
+// TASK CORE 0: REAL-TIME PID CONTROL LOOP
 // ============================================================
-void webSocketEvent(uint8_t clientNum, WStype_t type,
-                    uint8_t* payload, size_t length) {
-  switch (type) {
-    case WStype_CONNECTED:
-      wifiClientConnected = true;
-      Serial.printf("[Wi-Fi WS] Client #%u terhubung\n", clientNum);
-      break;
+void motorControlTask(void *pvParameters) {
+  initMotors();
+  setMotorSpeeds(0, 0);
+  
+  GamepadCommand receivedCmd;
+  unsigned long lastCommandTime = millis();
+  const unsigned long WATCHDOG_TIMEOUT = 500;
 
-    case WStype_DISCONNECTED:
-      wifiClientConnected = false;
-      stopAllMotors();
-      Serial.printf("[Wi-Fi WS] Client #%u terputus\n", clientNum);
-      break;
+  // Variabel state untuk Smoothing & PID
+  float smoothTargetL = 0, smoothTargetR = 0;
+  int32_t lastTicksL = 0, lastTicksR = 0;
+  
+  // Setup Periodic Task (50Hz = setiap 20ms)
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  const TickType_t xFrequency = pdMS_TO_TICKS(20); 
 
-    case WStype_TEXT:
-      processGamepadCommand(payload, length, "Wi-Fi WS");
-      break;
-
-    default:
-      break;
-  }
-}
-
-// ============================================================
-// CALLBACKS BLUETOOTH BLE
-// ============================================================
-class MyServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
-      bleClientConnected = true;
-      Serial.println("[BLE NUS] Client terhubung");
-    };
-
-    void onDisconnect(BLEServer* pServer) {
-      bleClientConnected = false;
-      stopAllMotors();
-      Serial.println("[BLE NUS] Client terputus");
-      pServer->getAdvertising()->start(); // Mulai advertising kembali agar bisa di-scan ulang
+  while (1) {
+    // 1. Cek Queue (Non-blocking)
+    if (xQueueReceive(commandQueue, &receivedCmd, 0) == pdTRUE) {
+      lastCommandTime = millis();
     }
+
+    // 2. Hitung Target Kinematika & Watchdog
+    int rawTargetL = 0, rawTargetR = 0;
+    if (millis() - lastCommandTime < WATCHDOG_TIMEOUT) {
+      driveKinematics(receivedCmd.lx, receivedCmd.ly, receivedCmd.dpad, rawTargetL, rawTargetR);
+    } else {
+      // WATCHDOG: Putus koneksi, paksa berhenti & reset PID
+      rawTargetL = 0; rawTargetR = 0;
+      pidLeft.reset(); pidRight.reset(); 
+    }
+
+    // 3. POIN D: Smoothing (Exponential Moving Average)
+    smoothTargetL += (rawTargetL - smoothTargetL) * SMOOTHING_ALPHA;
+    smoothTargetR += (rawTargetR - smoothTargetR) * SMOOTHING_ALPHA;
+
+    // 4. Konversi Target (%) ke Setpoint PID (Ticks/detik)
+    float setpointL = smoothTargetL * (MAX_TICKS_PER_SEC / 100.0);
+    float setpointR = smoothTargetR * (MAX_TICKS_PER_SEC / 100.0);
+
+    // 5. Baca Actual Speed dari Encoder
+    unsigned long currentTime = micros();
+    static unsigned long lastTime = currentTime;
+    float dt = (currentTime - lastTime) / 1000000.0; // dt dalam detik
+    lastTime = currentTime;
+
+    // Baca volatile variables (Aman di ESP32 32-bit)
+    int32_t currentTicksL = encoderLeftTicks;
+    int32_t currentTicksR = encoderRightTicks;
+    
+    float actualSpeedL = (currentTicksL - lastTicksL) / dt;
+    float actualSpeedR = (currentTicksR - lastTicksR) / dt;
+    
+    lastTicksL = currentTicksL;
+    lastTicksR = currentTicksR;
+
+    // 6. Compute PID & Output ke Motor
+    float pwmL = pidLeft.compute(setpointL, actualSpeedL, dt);
+    float pwmR = pidRight.compute(setpointR, actualSpeedR, dt);
+
+    setMotorSpeeds(pwmL, pwmR);
+
+    // Tunggu hingga siklus 20ms berikutnya (Menjaga dt tetap konstan)
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+  }
+}
+
+// ============================================================
+// NETWORK INGESTION ENGINE (POIN B: ArduinoJson v7)
+// ============================================================
+void parseAndEnqueue(uint8_t* payload, size_t length) {
+  JsonDocument doc; // Sintaks v7 (Otomatis alokasi stack)
+  DeserializationError err = deserializeJson(doc, payload, length);
+  
+  if (!err) {
+    GamepadCommand cmd;
+    cmd.lx = doc["LX"] | 0;
+    cmd.ly = doc["LY"] | 0;
+    
+    // Sintaks v7 yang aman untuk string
+    const char* dpad = doc["DPAD"] | ""; 
+    strlcpy(cmd.dpad, dpad, sizeof(cmd.dpad));
+    
+    xQueueOverwrite(commandQueue, &cmd);
+  }
+}
+
+// ============================================================
+// CALLBACKS RADIO (WI-FI & NimBLE)
+// ============================================================
+void webSocketEvent(uint8_t client_num, WStype_t type, uint8_t * payload, size_t length) {
+  if (type == WStype_TEXT) {
+    parseAndEnqueue(payload, length);
+  } else if (type == WStype_DISCONNECTED) {
+    GamepadCommand emptyCmd = {0, 0, ""};
+    xQueueOverwrite(commandQueue, &emptyCmd);
+  }
+}
+
+class BleCallbacks: public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic* pChar) {
+    String rx = pChar->getValue();
+    if (rx.length() > 0) {
+      parseAndEnqueue((uint8_t*)rx.c_str(), rx.length());
+    }
+  }
 };
 
-class BleRxCallbacks: public BLECharacteristicCallbacks {
-    void onWrite(BLECharacteristic *pCharacteristic) {
-      String rxValue = pCharacteristic->getValue();
-      if (rxValue.length() > 0) {
-        processGamepadCommand((uint8_t*)rxValue.c_str(), rxValue.length(), "BLE NUS");
-      }
-    }
+class ServerCallbacks: public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer* pServer) {}
+  void onDisconnect(NimBLEServer* pServer) {
+    GamepadCommand emptyCmd = {0, 0, ""};
+    xQueueOverwrite(commandQueue, &emptyCmd);
+    NimBLEDevice::startAdvertising(); // Auto-advertise ulang (Sintaks NimBLE)
+  }
 };
 
 // ============================================================
@@ -203,48 +281,37 @@ class BleRxCallbacks: public BLECharacteristicCallbacks {
 // ============================================================
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n=== ESP32 Robot Dual-Mode GamePad (Wi-Fi + BLE) ===");
 
-  setupMotors();
-  stopAllMotors();
+  commandQueue = xQueueCreate(1, sizeof(GamepadCommand));
 
-  // 1. Inisialisasi Wi-Fi Access Point & WebSocket
-  WiFi.softAP(AP_SSID, AP_PASSWORD);
-  Serial.printf("[Wi-Fi] AP aktif: %s\n", AP_SSID);
-  Serial.print("[Wi-Fi] ESP32 IP: ");
-  Serial.println(WiFi.softAPIP());
+  // Lempar Task Kontrol Motor & PID ke CORE 0
+  xTaskCreatePinnedToCore(motorControlTask, "MotorPIDTask", 4096, NULL, 5, NULL, 0);
 
+  // Infrastruktur Radio di Core 1
+  WiFi.softAP("ESP32-Robot", "12345678");
   webSocket.begin();
   webSocket.onEvent(webSocketEvent);
-  Serial.printf("[Wi-Fi] WebSocket server port: %d\n", WS_PORT);
 
-  // 2. Inisialisasi Bluetooth BLE (NUS Service)
-  BLEDevice::init(BLE_DEVICE_NAME);
-  pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
-
-  BLEService *pService = pServer->createService(SERVICE_UUID);
+  NimBLEDevice::init("ESP32-Gamepad");
+  pServer = NimBLEDevice::createServer();
+  pServer->setCallbacks(new ServerCallbacks());
   
-  BLECharacteristic *pRxCharacteristic = pService->createCharacteristic(
-                                         RX_CHARACTERISTIC_UUID,
-                                         BLECharacteristic::PROPERTY_WRITE |
-                                         BLECharacteristic::PROPERTY_WRITE_NR
-                                       );
-  pRxCharacteristic->setCallbacks(new BleRxCallbacks());
-  pRxCharacteristic->addDescriptor(new BLE2902());
-
+  NimBLEService *pService = pServer->createService("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
+  NimBLECharacteristic *pRx = pService->createCharacteristic(
+                             "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
+                             NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR // Sintaks NimBLE
+                           );
+  pRx->setCallbacks(new BleCallbacks());
   pService->start();
-  pServer->getAdvertising()->start();
-  Serial.printf("[BLE] Server '%s' siap di-scan...\n", BLE_DEVICE_NAME);
+  
+  NimBLEAdvertising *pAdvertising = NimBLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID("6e400001-b5a3-f393-e0a9-e50e24dcca9e");
+  pServer->startAdvertising();
+
+  Serial.println("Arsitektur Dual-Core PID Aktif!");
 }
 
 void loop() {
   webSocket.loop();
-
-  // Watchdog: hentikan motor jika ada client terhubung (Wi-Fi atau BLE) 
-  // tetapi tidak menerima paket dalam batas timeout WATCHDOG_TIMEOUT_MS (500ms)
-  bool anyClientConnected = wifiClientConnected || bleClientConnected;
-  if (anyClientConnected && (millis() - lastPacketMs > WATCHDOG_TIMEOUT_MS)) {
-    stopAllMotors();
-  }
+  vTaskDelay(pdMS_TO_TICKS(1));
 }
