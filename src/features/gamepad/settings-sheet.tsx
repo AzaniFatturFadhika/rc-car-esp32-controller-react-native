@@ -135,7 +135,11 @@ export const SettingsSheet = memo(function SettingsSheet({
     }
 
     // Trigger Native BLE Scan for 5 seconds
-    BleManager.scan([], 5, true)
+    BleManager.scan({
+      serviceUUIDs: [],
+      seconds: 5,
+      allowDuplicates: true,
+    })
       .then(() => {
         console.log("BLE Scan started successfully");
       })
