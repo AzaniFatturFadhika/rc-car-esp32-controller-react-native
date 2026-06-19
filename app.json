@@ -10,8 +10,10 @@
     "ios": {
       "icon": "./assets/expo.icon",
       "infoPlist": {
-        "NSBluetoothAlwaysUsageDescription": "This app requires Bluetooth access to connect to your ESP32 gamepad controller."
-      }
+        "NSBluetoothAlwaysUsageDescription": "This app requires Bluetooth access to connect to your ESP32 gamepad controller.",
+        "NSBluetoothPeripheralUsageDescription": "This app requires Bluetooth access to connect to your ESP32 gamepad controller."
+      },
+      "bundleIdentifier": "com.anonymous.controllerreactnative"
     },
     "android": {
       "adaptiveIcon": {

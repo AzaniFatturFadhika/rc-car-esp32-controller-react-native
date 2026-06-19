@@ -17,6 +17,7 @@ import {
 import { validateConnectionSettings } from "./protocol";
 import { saveConnectionSettings } from "./settings-storage";
 import type { ConnectionMode, ConnectionSettings, ConnectionStatus } from "./types";
+import { requestBluetoothPermissions } from "./use-gamepad-transport";
 
 let BleManager: any = null;
 let bleManagerEmitter: any = null;
@@ -117,7 +118,7 @@ export const SettingsSheet = memo(function SettingsSheet({
     };
   }, [visible]);
 
-  const handleStartScan = useCallback(() => {
+  const handleStartScan = useCallback(async () => {
     if (scanning) return;
     setDevices([]);
     setScanning(true);
@@ -131,6 +132,14 @@ export const SettingsSheet = memo(function SettingsSheet({
         ]);
         setScanning(false);
       }, 1500);
+      return;
+    }
+
+    // Request permissions before starting scan on Android
+    const hasPermission = await requestBluetoothPermissions();
+    if (!hasPermission) {
+      setScanning(false);
+      setValidationError("Bluetooth scanning permissions were denied.");
       return;
     }
 
