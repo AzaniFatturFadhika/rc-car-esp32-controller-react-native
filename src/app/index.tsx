@@ -20,7 +20,7 @@ import {
     useRef,
     useState,
 } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View, Animated } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -32,10 +32,6 @@ import {
     DPad,
     getActionVariant
 } from "@/features/gamepad/gamepad-controls";
-import {
-    encodeGamepadPayload,
-    serializeGamepadPayload,
-} from "@/features/gamepad/protocol";
 import { SettingsSheet } from "@/features/gamepad/settings-sheet";
 import { loadConnectionSettings } from "@/features/gamepad/settings-storage";
 import type {
@@ -48,7 +44,8 @@ import {
     DEFAULT_CONNECTION_SETTINGS,
     EMPTY_GAMEPAD_STATE,
 } from "@/features/gamepad/types";
-import { useGamepadTransport } from "@/features/gamepad/use-gamepad-transport";
+import { useConnectionStore } from "@/store/connectionStore";
+import { TelemetryDisplay } from "@/features/gamepad/telemetry-display";
 import { MultiTouchProvider } from "@/hooks/useMultiTouch";
 
 // ─── Reducer ─────────────────────────────────────────────────────────────────
@@ -103,22 +100,56 @@ export default function GamepadScreen() {
   const [connectionSettings, setConnectionSettings] =
     useState<ConnectionSettings>(DEFAULT_CONNECTION_SETTINGS);
 
-
-
   // Session timer
   const [sessionSeconds, setSessionSeconds] = useState(0);
   const sessionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
   );
 
-  // Serialise payload only when state changes.
-  const payloadMessage = useMemo(
-    () => encodeGamepadPayload(serializeGamepadPayload(gamepadState)),
-    [gamepadState],
-  );
+  // Connect Zustand connectionStore
+  const {
+    connectionStatus: status,
+    errorMessage,
+    rssi,
+    connectWiFi,
+    connectBLE,
+    disconnect
+  } = useConnectionStore();
 
-  const { status, errorMessage, rssi, connect, disconnect } =
-    useGamepadTransport(payloadMessage);
+  // Serialise payload only when state changes.
+  const payloadMessage = useMemo(() => {
+    return JSON.stringify({
+      type: "CMD",
+      lx: Math.round(gamepadState.leftStick.x),
+      ly: Math.round(gamepadState.leftStick.y),
+      dpad: gamepadState.dpad || "",
+    });
+  }, [gamepadState.leftStick.x, gamepadState.leftStick.y, gamepadState.dpad]);
+
+  // Throttled sender loop
+  const lastSentAtRef = useRef(0);
+  const sendTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const scheduleSendCommand = useCallback(() => {
+    if (sendTimerRef.current) return;
+
+    const elapsed = Date.now() - lastSentAtRef.current;
+    const wait = Math.max(0, 16 - elapsed);
+
+    sendTimerRef.current = setTimeout(() => {
+      sendTimerRef.current = null;
+      const lx = gamepadState.leftStick.x;
+      const ly = gamepadState.leftStick.y;
+      const dpad = gamepadState.dpad || '';
+
+      useConnectionStore.getState().sendCommand(lx, ly, dpad);
+      lastSentAtRef.current = Date.now();
+    }, wait);
+  }, [gamepadState.leftStick.x, gamepadState.leftStick.y, gamepadState.dpad]);
+
+  useEffect(() => {
+    scheduleSendCommand();
+  }, [scheduleSendCommand]);
 
   // Keep screen on while connected.
   useEffect(() => {
@@ -172,6 +203,60 @@ export default function GamepadScreen() {
       .catch(() => null);
   }, []);
 
+  // Toast notification state and animation
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [fadeAnim] = useState(() => new Animated.Value(0));
+
+  const showToast = useCallback((message: string) => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    setToastMessage(message);
+
+    // Fade In
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+
+    toastTimeoutRef.current = setTimeout(() => {
+      // Fade Out
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }).start(() => {
+        setToastMessage(null);
+      });
+      toastTimeoutRef.current = null;
+    }, 3000);
+  }, [fadeAnim]);
+
+  // Trigger haptics and toast on status changes
+  const prevStatusRef = useRef(status);
+  useEffect(() => {
+    if (status === prevStatusRef.current) return;
+
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+
+    if (status === "connected") {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => null);
+      setTimeout(() => showToast("ESP32 Gamepad Connected successfully! 🚀"), 0);
+    } else if (status === "reconnecting") {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => null);
+      setTimeout(() => showToast("Connection lost. Reconnecting... 🔄"), 0);
+    } else if (status === "error") {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => null);
+      setTimeout(() => showToast(errorMessage || "Connection failed. Please check setup. ❌"), 0);
+    } else if (status === "disconnected" && prev === "connected") {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => null);
+      setTimeout(() => showToast("Disconnected from ESP32."), 0);
+    }
+  }, [status, errorMessage, showToast]);
+
   // ─── Dispatcher helpers ───────────────────────────────────────────────────
 
   const handlePressButton = useCallback((button: ButtonId) => {
@@ -206,9 +291,13 @@ export default function GamepadScreen() {
   const handleConnect = useCallback(
     (settings: ConnectionSettings) => {
       setConnectionSettings(settings);
-      connect(settings);
+      if (settings.mode === "wifi") {
+        connectWiFi(settings.host, settings.port);
+      } else {
+        connectBLE(settings.deviceId, settings.deviceName);
+      }
     },
-    [connect],
+    [connectWiFi, connectBLE],
   );
 
   const togglePayloadDebug = useCallback(() => {
@@ -221,6 +310,11 @@ export default function GamepadScreen() {
 
   return (
     <GestureHandlerRootView style={styles.root}>
+      {toastMessage && (
+        <Animated.View style={[styles.toastContainer, { opacity: fadeAnim }]}>
+          <Text style={styles.toastText}>{toastMessage}</Text>
+        </Animated.View>
+      )}
       <MultiTouchProvider
         enabled={!settingsVisible}
         style={styles.background}
@@ -287,6 +381,8 @@ export default function GamepadScreen() {
               sessionSeconds={sessionSeconds}
               rssi={rssi}
             />
+
+            <TelemetryDisplay />
 
             <View style={styles.centerButtons}>
               <DigitalButton
@@ -503,5 +599,32 @@ const styles = StyleSheet.create({
     fontFamily: "monospace",
     textAlign: "center",
     paddingHorizontal: 4,
+  },
+  // ── Toast Notifications ───────────────────────────────────────────────────
+  toastContainer: {
+    position: "absolute",
+    top: 16,
+    left: 150,
+    right: 150,
+    backgroundColor: "rgba(18, 18, 38, 0.92)",
+    borderColor: "rgba(90, 90, 255, 0.35)",
+    borderWidth: 1,
+    borderRadius: 30,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    zIndex: 9999,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  toastText: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "700",
+    textAlign: "center",
   },
 });

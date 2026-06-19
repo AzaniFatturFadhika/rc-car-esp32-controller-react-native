@@ -9,28 +9,21 @@ import {
   Text,
   TextInput,
   View,
-  NativeModules,
-  NativeEventEmitter,
   ActivityIndicator,
 } from "react-native";
+import { BleManager } from "react-native-ble-plx";
 
-import { validateConnectionSettings } from "./protocol";
+import { validateConnectionSettings } from "../../services/protocol";
 import { saveConnectionSettings } from "./settings-storage";
 import type { ConnectionMode, ConnectionSettings, ConnectionStatus } from "./types";
-import { requestBluetoothPermissions } from "./use-gamepad-transport";
+import { requestBluetoothPermissions } from "../../services/ConnectionManager";
 
-let BleManager: any = null;
-let bleManagerEmitter: any = null;
+let localBleManager: BleManager | null = null;
 let isBleAvailable = false;
 
 try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  BleManager = require("react-native-ble-manager").default;
-  if (BleManager && typeof BleManager.start === "function") {
-    const BleManagerModule = NativeModules.BleManager;
-    bleManagerEmitter = new NativeEventEmitter(BleManagerModule);
-    isBleAvailable = true;
-  }
+  localBleManager = new BleManager();
+  isBleAvailable = true;
 } catch {
   // Safe fail for non-native environments
 }
@@ -72,7 +65,7 @@ export const SettingsSheet = memo(function SettingsSheet({
   const [validationError, setValidationError] = useState<string | null>(null);
 
   const isConnected =
-    status === "connected" || status === "connecting" || status === "reconnecting";
+    status === "connected" || status === "connecting" || status === "reconnecting" || status === "authenticating";
 
   // Sync settings when sheet opens
   useEffect(() => {
@@ -88,42 +81,25 @@ export const SettingsSheet = memo(function SettingsSheet({
     }
   }, [visible, currentSettings]);
 
-  // Real BLE Discovery Event Listeners
+  // Stop device scan when closing/unmounting
   useEffect(() => {
-    if (!visible || !isBleAvailable) return;
-
-    const discoverListener = bleManagerEmitter.addListener(
-      "BleManagerDiscoverPeripheral",
-      (peripheral: any) => {
-        const name = peripheral.name || peripheral.advertising?.localName;
-        if (name) {
-          setDevices((prev) => {
-            if (prev.some((d) => d.id === peripheral.id)) return prev;
-            return [...prev, { id: peripheral.id, name }];
-          });
+    return () => {
+      if (localBleManager) {
+        try {
+          localBleManager.stopDeviceScan();
+        } catch {
+          // ignore
         }
       }
-    );
-
-    const stopListener = bleManagerEmitter.addListener(
-      "BleManagerStopScan",
-      () => {
-        setScanning(false);
-      }
-    );
-
-    return () => {
-      discoverListener.remove();
-      stopListener.remove();
     };
-  }, [visible]);
+  }, []);
 
   const handleStartScan = useCallback(async () => {
     if (scanning) return;
     setDevices([]);
     setScanning(true);
 
-    if (!isBleAvailable) {
+    if (!isBleAvailable || !localBleManager) {
       // Simulate Bluetooth scanning in non-native environments
       setTimeout(() => {
         setDevices([
@@ -143,20 +119,40 @@ export const SettingsSheet = memo(function SettingsSheet({
       return;
     }
 
-    // Trigger Native BLE Scan for 5 seconds
-    BleManager.scan({
-      serviceUUIDs: [],
-      seconds: 5,
-      allowDuplicates: true,
-    })
-      .then(() => {
-        console.log("BLE Scan started successfully");
-      })
-      .catch((err: any) => {
-        console.error("BLE Scan start error:", err);
-        setScanning(false);
-        setValidationError("Could not initialize Bluetooth scanner.");
+    console.log("BLE Scan started successfully");
+    try {
+      localBleManager.startDeviceScan(null, null, (error, device) => {
+        if (error) {
+          console.error("BLE Scan error:", error);
+          setScanning(false);
+          setValidationError("Could not scan for Bluetooth devices.");
+          return;
+        }
+
+        if (device && device.name) {
+          setDevices((prev) => {
+            if (prev.some((d) => d.id === device.id)) return prev;
+            return [...prev, { id: device.id, name: device.name || "Unknown Device" }];
+          });
+        }
       });
+    } catch (err) {
+      console.error("Failed to start device scan:", err);
+      setScanning(false);
+      setValidationError("Failed to start Bluetooth scanner.");
+    }
+
+    // Timeout scanning after 5 seconds
+    setTimeout(() => {
+      if (localBleManager) {
+        try {
+          localBleManager.stopDeviceScan();
+        } catch {
+          // ignore
+        }
+      }
+      setScanning(false);
+    }, 5000);
   }, [scanning]);
 
   const handleSelectDevice = useCallback((device: DiscoveredDevice) => {

@@ -24,6 +24,7 @@ const STATUS_CONFIG: Record<
 > = {
   disconnected: { label: "DISCONNECTED", color: "#555577", pulse: false },
   connecting: { label: "CONNECTING…", color: "#f1c84b", pulse: true },
+  authenticating: { label: "AUTHENTICATING…", color: "#9b51e0", pulse: true },
   connected: { label: "CONNECTED", color: "#00a960", pulse: false },
   reconnecting: { label: "RECONNECTING…", color: "#f1943a", pulse: true },
   error: { label: "ERROR", color: "#d14a3f", pulse: false },

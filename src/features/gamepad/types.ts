@@ -38,6 +38,7 @@ export type ConnectionSettings = {
 export type ConnectionStatus =
   | 'disconnected'
   | 'connecting'
+  | 'authenticating'
   | 'connected'
   | 'reconnecting'
   | 'error';

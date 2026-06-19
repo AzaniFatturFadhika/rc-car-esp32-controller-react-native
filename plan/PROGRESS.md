@@ -4,9 +4,14 @@
 
 ---
 
-## Current Status: BLE Transport & Multi-Touch Fixes ✅ Complete
+## Current Status: Protocol & BLE Upgrade Refactoring ✅ Complete
 
-The app is a fully functional landscape gamepad controller that communicates with an ESP32 over either Wi-Fi WebSocket or Bluetooth BLE. All core features are implemented, audited, verified with unit tests (14/14 tests pass), linted, and typechecked.
+The app has been upgraded to align with the new ESP32 firmware protocol, dual-channel communication (WiFi WebSocket + BLE using `react-native-ble-plx`), authentication, keep-alive heartbeats, state management with Zustand, and telemetry support as detailed in [panduan-upgrade.md](file:///home/fadhika/Documents/GitHub/controller-react-native/docs/panduan-upgrade.md).
+
+### ⚠️ Scope Boundaries & Constraints
+- **Functionality**: The app functions *strictly* as a remote controller and telemetry display.
+- **Hardware Profile**: Designed only for an ESP32 RC car with two motors (Left and Right) and no additional sensors or actuators.
+- **No Unnecessary Features**: Advanced features like UDP streaming, custom button remapping, analog stick calibration screens, camera streaming, navigation maps, and OTA firmware updates are excluded from this project.
 
 ---
 
@@ -104,52 +109,47 @@ src/
 
 ## Roadmap — Future Phases
 
-### Phase 2: BLE Transport 🔴 Complete
-- [x] Add `react-native-ble-manager` dependency
-- [x] Android permissions: `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT` (API 31+)
-- [x] iOS permissions: `NSBluetoothAlwaysUsageDescription`
-- [x] BLE scan screen — filter by ESP32 device name / service UUID
-- [x] BLE connect / pair — show RSSI, handle bonding
-- [x] BLE keepalive — poll RSSI every 2s, warn if < −80 dBm
-- [x] Auto-reconnect with exponential backoff (same as Wi-Fi)
-- [x] Binary payload format (7 bytes) for BLE 4.x 20-byte limit (Optional / JSON implemented)
-- [x] Connection driver abstraction — shared interface for BLE and Wi-Fi
-- [x] Connection mode selector UI (BLE vs Wi-Fi)
-- [x] Mode label on status bar ("BLE" / "Wi-Fi")
+### Phase 2: BLE & WiFi Protocol Refactoring (Upgrade Guide) ✅ Complete
 
-### Phase 3: UDP Transport 🟡 Medium
+Refactor the networking and BLE stack to match the new firmware spec with structured authentication, heartbeat telemetry, and Zustand state.
 
-Add UDP for ultra-low-latency analog stick streaming (fire-and-forget, no ACK).
+- [x] Install upgrade dependencies (`zustand`, `@craftzdog/react-native-ble-plx`)
+- [x] Configure `@craftzdog/react-native-ble-plx` plugin in `app.json`
+- [x] Implement typed JSON protocol schemas (`src/services/protocol.ts`)
+- [x] Implement dual-channel `ConnectionManager` (`src/services/ConnectionManager.ts`) using `react-native-ble-plx` and WebSockets
+- [x] Implement Zustand state store (`src/store/connectionStore.ts`) to manage connection state and telemetry
+- [x] Refactor Gamepad Screen (`src/app/index.tsx`):
+  - [x] Add real-time `TelemetryDisplay` component to Center Panel (speedL, speedR, battery)
+  - [x] Replace `use-gamepad-transport` with Zustand-backed `ConnectionManager`
+  - [x] Update D-Pad, Buttons, and Sticks to dispatch commands via Zustand
+- [x] Verify WiFi & BLE auth handshake, keep-alive, RSSI monitoring, and simulated fallback modes
 
-- [ ] Add `react-native-udp` dependency
-- [ ] UDP send for analog stick data (port 8888 default)
-- [ ] Split transport: analog via UDP, buttons via WebSocket
-- [ ] UDP-specific settings in settings sheet (port config)
+### Phase 3: Polish & UX ✅ Complete
 
-### Phase 4: Polish & UX 🟢 Small–Medium
+- [x] Toast notification on connection lost / reconnect failed
+- [x] Vibration patterns for connect, disconnect, and error feedback
 
-- [ ] Toast notification on connection lost / reconnect failed
-- [ ] Button remapping screen (custom mapping, saved to AsyncStorage)
-- [ ] Analog stick calibration / testing screen
-- [ ] Vibration patterns for different events (connect, disconnect, error)
-- [ ] Connection history (recent ESP32 devices)
-
-### Phase 5: Build & Deploy
+### Phase 4: Build & Deploy
 
 - [ ] EAS Build configuration for Android APK / iOS IPA
-- [ ] App icon and splash screen customization
-- [ ] OTA update setup (EAS Update)
+- [ ] App icon and splash screen assets
 
 ---
 
 ## Technical Notes
 
 ### ESP32 Protocol
-- JSON payload: `{ LX, LY, RX, RY, BTN, DPAD }`
-- WebSocket port: configurable (default 81)
-- UDP port: configurable (default 8888)
+- Outgoing JSON messages:
+  - `{"type": "AUTH", "token": "secret123"}`
+  - `{"type": "HEARTBEAT"}`
+  - `{"type": "CMD", "lx": number, "ly": number, "dpad": string}`
+- Incoming JSON messages:
+  - `{"type": "TELEMETRY", "speedL": number, "speedR": number, "battery": number, "mode": number}`
+  - `{"type": "ACK", "cmd": string, "status": "OK"}`
+  - `{"type": "AUTH_REQUIRED"}`
+  - `{"type": "AUTH_STATUS", "status": "OK" | "FAILED"}`
+- WebSocket port: 81 (configurable)
 - ESP32 watchdog: expects packet every 500ms, stops motors on timeout
-- See: `.skills/esp32-gamepad-skill/references/esp32-protocol.md`
 
 ### Performance Constraints
 - Analog throttle: only dispatch if |ΔX| > 5 or |ΔY| > 5
@@ -159,6 +159,8 @@ Add UDP for ultra-low-latency analog stick streaming (fire-and-forget, no ACK).
 
 ### Key Dependencies
 - Expo SDK v56
+- `@craftzdog/react-native-ble-plx` (BLE Client)
+- `zustand` (State Management)
 - `expo-router` (Stack navigation)
 - `expo-screen-orientation` (landscape lock)
 - `expo-keep-awake` (screen on while connected)
