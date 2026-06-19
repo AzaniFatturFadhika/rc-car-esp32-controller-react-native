@@ -48,7 +48,7 @@ import {
     DEFAULT_CONNECTION_SETTINGS,
     EMPTY_GAMEPAD_STATE,
 } from "@/features/gamepad/types";
-import { useWifiTransport } from "@/features/gamepad/use-wifi-transport";
+import { useGamepadTransport } from "@/features/gamepad/use-gamepad-transport";
 import { MultiTouchProvider } from "@/hooks/useMultiTouch";
 
 // ─── Reducer ─────────────────────────────────────────────────────────────────
@@ -117,8 +117,8 @@ export default function GamepadScreen() {
     [gamepadState],
   );
 
-  const { status, errorMessage, connect, disconnect } =
-    useWifiTransport(payloadMessage);
+  const { status, errorMessage, rssi, connect, disconnect } =
+    useGamepadTransport(payloadMessage);
 
   // Keep screen on while connected.
   useEffect(() => {
@@ -283,9 +283,9 @@ export default function GamepadScreen() {
             <ConnectionStatusBar
               status={status}
               errorMessage={errorMessage}
-              host={connectionSettings.host}
-              port={connectionSettings.port}
+              settings={connectionSettings}
               sessionSeconds={sessionSeconds}
+              rssi={rssi}
             />
 
             <View style={styles.centerButtons}>

@@ -8,7 +8,10 @@
     "scheme": "controllerrobot",
     "userInterfaceStyle": "dark",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "This app requires Bluetooth access to connect to your ESP32 gamepad controller."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -18,7 +21,14 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.controllerreactnative"
+      "package": "com.anonymous.controllerreactnative",
+      "permissions": [
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "output": "static",

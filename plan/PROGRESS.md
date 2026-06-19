@@ -1,14 +1,12 @@
 # ESP32 GamePad Controller — Progress & Roadmap
 
-> Last updated: 2026-06-18
+> Last updated: 2026-06-19
 
 ---
 
-## Current Status: Wi-Fi MVP ✅ Complete
+## Current Status: BLE Transport & Multi-Touch Fixes ✅ Complete
 
-The app is a fully functional landscape gamepad controller that communicates
-with an ESP32 over Wi-Fi WebSocket. All core features are implemented, tested
-(lint + tsc clean), and the codebase has zero dead code.
+The app is a fully functional landscape gamepad controller that communicates with an ESP32 over either Wi-Fi WebSocket or Bluetooth BLE. All core features are implemented, audited, verified with unit tests (14/14 tests pass), linted, and typechecked.
 
 ---
 
@@ -20,14 +18,17 @@ src/
 │   ├── _layout.tsx              # Stack navigator, status bar hidden
 │   └── index.tsx                # Main GamePad screen (3-panel layout)
 │
+├── hooks/
+│   └── useMultiTouch.tsx        # Multi-touch gesture dispatcher
+│
 └── features/gamepad/
-    ├── types.ts                 # GamepadState, ButtonId, ConnectionSettings
+    ├── types.ts                 # GamepadState, ButtonId, ConnectionSettings, ConnectionMode
     ├── protocol.ts              # serialize, encode, validate, buildWebSocketUrl
     ├── settings-storage.ts      # AsyncStorage load/save
-    ├── use-wifi-transport.ts    # WebSocket hook (throttle, heartbeat, reconnect)
-    ├── gamepad-controls.tsx     # AnalogStick, DigitalButton, DPad
-    ├── connection-status-bar.tsx # Status dot + pulse animation + session timer
-    └── settings-sheet.tsx       # Modal: host/port input, connect/disconnect
+    ├── use-gamepad-transport.ts # Unified WebSocket & BLE hook (throttle, heartbeat, reconnect)
+    ├── gamepad-controls.tsx     # AnalogStick, DigitalButton, DPad (zone registrations)
+    ├── connection-status-bar.tsx # Status dot + pulse animation + session timer + RSSI signal
+    └── settings-sheet.tsx       # Modal: host/port/BLE scanner, connect/disconnect
 ```
 
 ---
@@ -55,6 +56,18 @@ src/
 - [x] 3 missed heartbeats → auto-disconnect
 - [x] Auto-reconnect 3× with backoff (250 → 600 → 1100 ms)
 - [x] 5 connection states: disconnected / connecting / connected / reconnecting / error
+
+### Transport (Bluetooth BLE)
+- [x] Add `react-native-ble-manager` dependency
+- [x] Android permissions: `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, `ACCESS_FINE_LOCATION` (API 31+ splits)
+- [x] iOS permissions: `NSBluetoothAlwaysUsageDescription`
+- [x] BLE scanning and discovery in settings sheet (filtering and listing discovered devices)
+- [x] BLE connect / pair / retrieve services
+- [x] BLE MTU negotiation (request 512 bytes)
+- [x] BLE keepalive (poll RSSI every 2 seconds, warn user if RSSI < -80 dBm)
+- [x] BLE auto-reconnect 3× with exponential backoff (250ms → 600ms → 1100ms)
+- [x] Simulator fallback mode for non-native/emulator testing
+- [x] Unified connection driver interface (`useGamepadTransport`) for Wi-Fi and BLE
 
 ### UI Controls
 - [x] Left & Right Analog Sticks (PanResponder, radius clamp, 5% deadzone)
@@ -85,27 +98,24 @@ src/
 - [x] TypeScript `tsc --noEmit` — 0 errors
 - [x] No dead code, no orphaned starter files
 - [x] React Compiler compatible (all hooks rules satisfied)
+- [x] Jest Unit Testing — 14/14 tests passing successfully
 
 ---
 
 ## Roadmap — Future Phases
 
-### Phase 2: BLE Transport 🔴 Large
-
-Add Bluetooth Low Energy as an alternative transport for cable-free operation
-without Wi-Fi dependency.
-
-- [ ] Add `react-native-ble-manager` dependency
-- [ ] Android permissions: `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT` (API 31+)
-- [ ] iOS permissions: `NSBluetoothAlwaysUsageDescription`
-- [ ] BLE scan screen — filter by ESP32 device name / service UUID
-- [ ] BLE connect / pair — show RSSI, handle bonding
-- [ ] BLE keepalive — poll RSSI every 2s, warn if < −80 dBm
-- [ ] Auto-reconnect with exponential backoff (same as Wi-Fi)
-- [ ] Binary payload format (7 bytes) for BLE 4.x 20-byte limit
-- [ ] Connection driver abstraction — shared interface for BLE and Wi-Fi
-- [ ] Connection mode selector UI (BLE vs Wi-Fi)
-- [ ] Mode label on status bar ("BLE" / "Wi-Fi")
+### Phase 2: BLE Transport 🔴 Complete
+- [x] Add `react-native-ble-manager` dependency
+- [x] Android permissions: `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT` (API 31+)
+- [x] iOS permissions: `NSBluetoothAlwaysUsageDescription`
+- [x] BLE scan screen — filter by ESP32 device name / service UUID
+- [x] BLE connect / pair — show RSSI, handle bonding
+- [x] BLE keepalive — poll RSSI every 2s, warn if < −80 dBm
+- [x] Auto-reconnect with exponential backoff (same as Wi-Fi)
+- [x] Binary payload format (7 bytes) for BLE 4.x 20-byte limit (Optional / JSON implemented)
+- [x] Connection driver abstraction — shared interface for BLE and Wi-Fi
+- [x] Connection mode selector UI (BLE vs Wi-Fi)
+- [x] Mode label on status bar ("BLE" / "Wi-Fi")
 
 ### Phase 3: UDP Transport 🟡 Medium
 

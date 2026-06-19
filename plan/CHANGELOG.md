@@ -2,6 +2,23 @@
 
 All notable progress on the ESP32 GamePad Controller app.
 
+## 2026-06-19 — BLE Transport & Multi-Touch Fixes Complete
+
+### Implemented
+- **Bluetooth BLE Transport** — Fully integrated `react-native-ble-manager` with support for scanning, device listing, connection, and services retrieval.
+- **Unified Gamepad Transport** — Refactored Wi-Fi and BLE modes behind a shared hook (`useGamepadTransport`) supporting state indicators, heartbeat, and reconnection logic.
+- **BLE keepalive & RSSI polling** — RSSI checks every 2s with UI warnings for signal quality (< -80 dBm).
+- **Emulator / BLE Simulation Mode** — Simulator fallback when running on Expo Go or devices without native BLE, printing payloads and simulating signal quality.
+- **Automatic Android Permissions** — Automated scanning, connection, and location permission requests on Android API 31+.
+- **Touch state cleanup** — Added cleanup mechanisms to prevent stuck inputs when disabling gamepad controls or opening panels.
+- **Unit Testing Suite** — Restructured and added 14 unit tests covering hooks and components under React 19 testing library, setting up native Worklets/Reanimated mock bypasses.
+
+### Fixed
+- Fixed missing native module crash on `NativeEventEmitter` initialization when BLE is unavailable or mocked.
+- Removed premature disconnect trigger from throttled BLE write-without-response failures.
+- Fixed properties typing bug in `ConnectionStatusBar` unit tests.
+- Downgraded `@react-native/jest-preset` to resolve dependency conflicts.
+
 ## 2026-06-18 — Wi-Fi MVP Complete
 
 ### Implemented
