@@ -414,6 +414,7 @@ const styles = StyleSheet.create({
     width: "100%",
     maxWidth: 480,
     alignSelf: "center",
+    maxHeight: "88%",
   },
   sheet: {
     backgroundColor: "#12122a",
@@ -423,11 +424,11 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderLeftWidth: 1,
     borderRightWidth: 1,
-    maxHeight: 520,
   },
   sheetContent: {
-    padding: 24,
-    gap: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 16,
+    gap: 10,
   },
   header: {
     flexDirection: "row",
@@ -504,7 +505,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.08)",
     borderWidth: 1,
     borderRadius: 10,
-    padding: 14,
+    padding: 10,
   },
   noDeviceText: {
     color: "rgba(255,255,255,0.3)",
@@ -546,7 +547,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.06)",
     borderWidth: 1,
     borderRadius: 10,
-    maxHeight: 120,
+    maxHeight: 90,
     overflow: "hidden",
   },
   emptyListText: {
