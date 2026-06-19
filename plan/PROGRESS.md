@@ -119,7 +119,7 @@ Refactor the networking and BLE stack to match the new firmware spec with struct
 - [x] Implement dual-channel `ConnectionManager` (`src/services/ConnectionManager.ts`) using `react-native-ble-plx` and WebSockets
 - [x] Implement Zustand state store (`src/store/connectionStore.ts`) to manage connection state and telemetry
 - [x] Refactor Gamepad Screen (`src/app/index.tsx`):
-  - [x] Add real-time `TelemetryDisplay` component to Center Panel (speedL, speedR, battery)
+  - [x] Add real-time `TelemetryDisplay` component to Center Panel (speedL, speedR)
   - [x] Replace `use-gamepad-transport` with Zustand-backed `ConnectionManager`
   - [x] Update D-Pad, Buttons, and Sticks to dispatch commands via Zustand
 - [x] Verify WiFi & BLE auth handshake, keep-alive, RSSI monitoring, and simulated fallback modes
@@ -144,7 +144,7 @@ Refactor the networking and BLE stack to match the new firmware spec with struct
   - `{"type": "HEARTBEAT"}`
   - `{"type": "CMD", "lx": number, "ly": number, "dpad": string}`
 - Incoming JSON messages:
-  - `{"type": "TELEMETRY", "speedL": number, "speedR": number, "battery": number, "mode": number}`
+  - `{"type": "TELEMETRY", "speedL": number, "speedR": number}`
   - `{"type": "ACK", "cmd": string, "status": "OK"}`
   - `{"type": "AUTH_REQUIRED"}`
   - `{"type": "AUTH_STATUS", "status": "OK" | "FAILED"}`

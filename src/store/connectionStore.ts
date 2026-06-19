@@ -4,8 +4,6 @@ import { connectionManager, ConnectionType, ConnectionStatus } from '../services
 export interface TelemetryData {
   speedL: number;
   speedR: number;
-  battery: number;
-  mode: number;
 }
 
 interface ConnectionStoreState {
@@ -33,7 +31,7 @@ export const useConnectionStore = create<ConnectionStoreState>((set, get) => ({
   isAuthenticated: false,
   errorMessage: null,
   rssi: null,
-  telemetry: { speedL: 0, speedR: 0, battery: 0, mode: 0 },
+  telemetry: { speedL: 0, speedR: 0 },
 
   connectWiFi: async (host, port) => {
     set({ errorMessage: null });
@@ -60,7 +58,7 @@ export const useConnectionStore = create<ConnectionStoreState>((set, get) => ({
       connectionStatus: 'disconnected',
       isAuthenticated: false,
       rssi: null,
-      telemetry: { speedL: 0, speedR: 0, battery: 0, mode: 0 }
+      telemetry: { speedL: 0, speedR: 0 }
     });
   },
 
@@ -99,8 +97,6 @@ connectionManager.onMessage = (message) => {
       telemetry: {
         speedL: message.speedL ?? 0,
         speedR: message.speedR ?? 0,
-        battery: message.battery ?? 0,
-        mode: message.mode ?? 0,
       }
     });
   }

@@ -20,7 +20,7 @@
 #define ENC_R_A 21
 #define ENC_R_B 22
 
-#define BATTERY_PIN 34  // ADC pin untuk baca baterai (opsional)
+
 
 const int PWM_FREQ = 2000;       
 const int PWM_RESOLUTION = 8;    
@@ -70,7 +70,6 @@ struct GamepadCommand {
 struct TelemetryData {
   float speedL;
   float speedR;
-  int batteryPercent;
   uint32_t lastUpdate;
 };
 
@@ -247,23 +246,13 @@ void sendTelemetry() {
   doc["type"] = "TELEMETRY";
   doc["speedL"] = telemetryData.speedL;
   doc["speedR"] = telemetryData.speedR;
-  doc["battery"] = telemetryData.batteryPercent;
-  doc["mode"] = (int)activeConnection;
   
   char buffer[128];
   size_t len = serializeJson(doc, buffer);
   sendToClients(buffer, len, 2); // Broadcast ke semua
 }
 
-int readBatteryPercent() {
-  // Implementasi sesuai hardware Anda
-  // Contoh: analogRead(BATTERY_PIN) dengan voltage divider
-  int raw = analogRead(BATTERY_PIN);
-  float voltage = raw * (3.3f / 4095.0f) * 2.0f;  // Voltage divider 2x
-  // Asumsi baterai LiPo 1S (4.2V full, 3.3V empty)
-  int percent = constrain(map(voltage * 100, 330, 420, 0, 100), 0, 100);
-  return percent;
-}
+
 
 void updateConnectionPriority() {
   uint32_t now = millis();
@@ -370,13 +359,6 @@ void telemetryTask(void *pvParameters) {
   const TickType_t xFrequency = pdMS_TO_TICKS(100); // 10Hz
   
   while (1) {
-    // Update battery (setiap 1 detik = setiap 10 loop)
-    static uint8_t counter = 0;
-    if (++counter >= 10) {
-      telemetryData.batteryPercent = readBatteryPercent();
-      counter = 0;
-    }
-    
     // Send telemetry
     sendTelemetry();
     

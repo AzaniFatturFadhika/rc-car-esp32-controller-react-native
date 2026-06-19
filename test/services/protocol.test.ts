@@ -27,14 +27,12 @@ describe("Protocol Services", () => {
   });
 
   it("parses valid incoming telemetry", () => {
-    const raw = '{"type":"TELEMETRY","speedL":120,"speedR":115,"battery":80,"mode":1}';
+    const raw = '{"type":"TELEMETRY","speedL":120,"speedR":115}';
     const parsed = parseIncomingMessage(raw);
     expect(parsed).toEqual({
       type: "TELEMETRY",
       speedL: 120,
       speedR: 115,
-      battery: 80,
-      mode: 1,
     });
   });
 

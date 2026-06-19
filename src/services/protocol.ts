@@ -6,7 +6,7 @@ export type OutgoingMessage =
 
 // Tipe pesan dari ESP32 ke App
 export type IncomingMessage =
-  | { type: 'TELEMETRY'; speedL: number; speedR: number; battery: number; mode: number }
+  | { type: 'TELEMETRY'; speedL: number; speedR: number }
   | { type: 'ACK'; cmd: string; status: string }
   | { type: 'AUTH_REQUIRED' }
   | { type: 'AUTH_STATUS'; status: 'OK' | 'FAILED' };

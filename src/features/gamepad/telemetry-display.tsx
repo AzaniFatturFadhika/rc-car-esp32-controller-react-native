@@ -9,12 +9,6 @@ export const TelemetryDisplay: React.FC = () => {
     return null;
   }
 
-  const getBatteryColor = () => {
-    if (telemetry.battery > 60) return '#00a960'; // Green
-    if (telemetry.battery > 30) return '#f1c84b'; // Yellow
-    return '#d14a3f'; // Red
-  };
-
   return (
     <View style={styles.container}>
       <Text style={styles.title}>TELEMETRY</Text>
@@ -27,13 +21,6 @@ export const TelemetryDisplay: React.FC = () => {
       <View style={styles.row}>
         <Text style={styles.label}>MOTOR R</Text>
         <Text style={styles.value}>{Math.round(telemetry.speedR)} RPM</Text>
-      </View>
-
-      <View style={styles.row}>
-        <Text style={styles.label}>BATTERY</Text>
-        <Text style={[styles.value, { color: getBatteryColor(), fontWeight: 'bold' }]}>
-          {telemetry.battery}%
-        </Text>
       </View>
     </View>
   );
