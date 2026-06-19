@@ -130,10 +130,32 @@ export class ConnectionManager {
       
       console.log(`Connecting WebSocket to: ${url}`);
       
+      let connectionTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+        if (this.connectionStatus === 'connecting' || this.connectionStatus === 'reconnecting') {
+          console.log('WebSocket connection timeout reached');
+          if (this.ws) {
+            this.ws.onopen = null;
+            this.ws.onclose = null;
+            this.ws.onerror = null;
+            this.ws.onmessage = null;
+            this.ws.close();
+            this.ws = null;
+          }
+          if (attempt === 0) {
+            this.onError?.(`Connection timeout to ${host}:${port}`);
+          }
+          this.handleDisconnectOrFailure(reject);
+        }
+      }, 5000); // 5 seconds connection timeout
+
       try {
         this.ws = new WebSocket(url);
 
         this.ws.onopen = () => {
+          if (connectionTimeout) {
+            clearTimeout(connectionTimeout);
+            connectionTimeout = null;
+          }
           console.log('WebSocket connected, authenticating...');
           this.reconnectAttempts = 0;
           this.missedHeartbeats = 0;
@@ -150,6 +172,10 @@ export class ConnectionManager {
         };
 
         this.ws.onerror = (error) => {
+          if (connectionTimeout) {
+            clearTimeout(connectionTimeout);
+            connectionTimeout = null;
+          }
           console.log('WebSocket error:', error);
           if (attempt === 0) {
             this.onError?.(`Could not reach ${host}:${port}`);
@@ -157,10 +183,18 @@ export class ConnectionManager {
         };
 
         this.ws.onclose = (event) => {
+          if (connectionTimeout) {
+            clearTimeout(connectionTimeout);
+            connectionTimeout = null;
+          }
           console.log(`WebSocket closed: code=${event.code}, reason=${event.reason}`);
           this.handleDisconnectOrFailure(reject);
         };
       } catch (error) {
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+          connectionTimeout = null;
+        }
         console.error('Error creating WebSocket:', error);
         this.handleDisconnectOrFailure(reject);
       }
