@@ -459,22 +459,67 @@ void wsEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t len) {
     }
 }
 
+#if __has_include("NimBLECppVersion.h")
+#include "NimBLECppVersion.h"
+#endif
+
+std::string bleRxBuf = "";
+
 class BleCharCB : public NimBLECharacteristicCallbacks {
-    void onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) override {
+    void handleWrite(NimBLECharacteristic* pChar) {
         NimBLEAttValue val = pChar->getValue();
-        if (val.length() > 0) processPayload((uint8_t*)val.data(), val.length(), 1);
+        if (val.length() > 0) {
+            // Jika paket adalah command biner utuh (header 0xAA dan panjang 7 byte), bypass buffer
+            if (val.length() == 7 && val.data()[0] == 0xAA) {
+                processPayload((uint8_t*)val.data(), val.length(), 1);
+                return;
+            }
+
+            // Gabungkan potongan paket JSON (misal AUTH/HB)
+            for (size_t i = 0; i < val.length(); i++) {
+                char c = (char)val[i];
+                bleRxBuf += c;
+                if (c == '}') {
+                    processPayload((uint8_t*)bleRxBuf.c_str(), bleRxBuf.length(), 1);
+                    bleRxBuf = "";
+                }
+            }
+        }
     }
+
+#if defined(NIMBLE_CPP_VER_MAJOR) && NIMBLE_CPP_VER_MAJOR >= 2
+    void onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) override {
+        handleWrite(pChar);
+    }
+#else
+    void onWrite(NimBLECharacteristic* pChar) override {
+        handleWrite(pChar);
+    }
+#endif
 };
 
 class BleServCB : public NimBLEServerCallbacks {
+#if defined(NIMBLE_CPP_VER_MAJOR) && NIMBLE_CPP_VER_MAJOR >= 2
     void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override { 
         ESP_LOGI(TAG, "BLE Client Connected.");
         lastBleAct = lastHB = millis(); 
     }
     void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override { 
         ESP_LOGW(TAG, "BLE Disconnected. Reason: %d", reason);
+        bleRxBuf = "";
         NimBLEDevice::startAdvertising(); 
     }
+#else
+    void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) override { 
+        ESP_LOGI(TAG, "BLE Client Connected.");
+        lastBleAct = lastHB = millis(); 
+    }
+    void onDisconnect(NimBLEServer* pServer) override { 
+        ESP_LOGW(TAG, "BLE Disconnected.");
+        bleRxBuf = "";
+        NimBLEDevice::startAdvertising(); 
+    }
+#endif
 };
 
 // ============================================================
