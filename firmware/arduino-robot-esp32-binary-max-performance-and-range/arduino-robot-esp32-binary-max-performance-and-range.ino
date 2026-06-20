@@ -16,8 +16,17 @@ static const char *TAG = "RC_RACE";
 // ============================================================
 // 1. HARDWARE & PIN CONFIGURATION
 // ============================================================
-#define ENA 14, ENB 13, IN1 27, IN2 26, IN3 25, IN4 33
-#define ENC_L_A 18, ENC_L_B 19, ENC_R_A 21, ENC_R_B 22
+#define ENA 14
+#define ENB 13
+#define IN1 27
+#define IN2 26
+#define IN3 25
+#define IN4 33
+
+#define ENC_L_A 18
+#define ENC_L_B 19
+#define ENC_R_A 21
+#define ENC_R_B 22
 
 const int PWM_FREQ = 2000;
 const int PWM_RES = 8;
