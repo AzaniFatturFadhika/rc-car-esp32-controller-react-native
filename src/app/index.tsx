@@ -173,36 +173,32 @@ export default function GamepadScreen() {
     isBinaryProtocol
   ]);
 
-  // Throttled sender loop
-  const lastSentAtRef = useRef(0);
-  const sendTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Continuous sender loop to prevent ESP32 motor watchdog timeout
+  useEffect(() => {
+    let active = true;
+    const sendLoop = () => {
+      if (!active) return;
 
-  const scheduleSendCommand = useCallback(() => {
-    if (sendTimerRef.current) return;
-
-    const elapsed = Date.now() - lastSentAtRef.current;
-    const wait = Math.max(0, 16 - elapsed);
-
-    sendTimerRef.current = setTimeout(() => {
-      sendTimerRef.current = null;
       const L = gamepadState.leftStick.y;
       const R = gamepadState.rightStick.y;
       const dpad = gamepadState.dpad || '';
 
       const { lx, ly, rx } = mixTankDrive(R, L);
-
       useConnectionStore.getState().sendCommand(lx, ly, rx, 0, dpad);
-      lastSentAtRef.current = Date.now();
-    }, wait);
+
+      setTimeout(sendLoop, 50); // Send every 50ms (20Hz) to keep watchdog alive
+    };
+
+    sendLoop();
+
+    return () => {
+      active = false;
+    };
   }, [
     gamepadState.leftStick.y,
     gamepadState.rightStick.y,
     gamepadState.dpad
   ]);
-
-  useEffect(() => {
-    scheduleSendCommand();
-  }, [scheduleSendCommand]);
 
   // Keep screen on while connected.
   useEffect(() => {
