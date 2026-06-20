@@ -1,32 +1,33 @@
-import { memo, useEffect } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { memo, useEffect } from "react";
+import { StyleSheet, Text, View } from "react-native";
 import Animated, {
   cancelAnimation,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
   withTiming,
-} from 'react-native-reanimated';
+} from "react-native-reanimated";
 
-import type { ConnectionStatus } from './types';
+import type { ConnectionSettings, ConnectionStatus } from "./types";
 
 type ConnectionStatusBarProps = {
   status: ConnectionStatus;
   errorMessage: string | null;
-  host: string;
-  port: number;
+  settings: ConnectionSettings;
   sessionSeconds: number;
+  rssi?: number | null;
 };
 
 const STATUS_CONFIG: Record<
   ConnectionStatus,
   { label: string; color: string; pulse: boolean }
 > = {
-  disconnected: { label: 'DISCONNECTED', color: '#555577', pulse: false },
-  connecting: { label: 'CONNECTING…', color: '#f1c84b', pulse: true },
-  connected: { label: 'CONNECTED', color: '#00a960', pulse: false },
-  reconnecting: { label: 'RECONNECTING…', color: '#f1943a', pulse: true },
-  error: { label: 'ERROR', color: '#d14a3f', pulse: false },
+  disconnected: { label: "DISCONNECTED", color: "#555577", pulse: false },
+  connecting: { label: "CONNECTING…", color: "#f1c84b", pulse: true },
+  authenticating: { label: "AUTHENTICATING…", color: "#9b51e0", pulse: true },
+  connected: { label: "CONNECTED", color: "#00a960", pulse: false },
+  reconnecting: { label: "RECONNECTING…", color: "#f1943a", pulse: true },
+  error: { label: "ERROR", color: "#d14a3f", pulse: false },
 };
 
 function formatTime(totalSeconds: number): string {
@@ -38,9 +39,9 @@ function formatTime(totalSeconds: number): string {
 export const ConnectionStatusBar = memo(function ConnectionStatusBar({
   status,
   errorMessage,
-  host,
-  port,
+  settings,
   sessionSeconds,
+  rssi = null,
 }: ConnectionStatusBarProps) {
   const config = STATUS_CONFIG[status];
 
@@ -64,21 +65,40 @@ export const ConnectionStatusBar = memo(function ConnectionStatusBar({
     opacity: dotOpacity.value,
   }));
 
+  const renderTargetInfo = () => {
+    if (settings.mode === "wifi") {
+      return `ws://${settings.host}:${settings.port}`;
+    }
+    return `BLE: ${settings.deviceName || "ESP32"}`;
+  };
+
+  const getRssiStyle = () => {
+    if (rssi !== null && rssi < -80) {
+      return styles.rssiWeak;
+    }
+    return styles.rssiText;
+  };
+
   return (
     <View style={styles.container}>
       <Animated.View
         style={[styles.dot, { backgroundColor: config.color }, dotAnimatedStyle]}
       />
       <Text style={[styles.statusText, { color: config.color }]}>{config.label}</Text>
-      {status === 'connected' && (
+      {status === "connected" && (
         <>
-          <Text style={styles.addressText}>
-            ws://{host}:{port}
+          <Text style={styles.addressText} numberOfLines={1}>
+            {renderTargetInfo()}
           </Text>
+          {settings.mode === "bluetooth" && rssi !== null && (
+            <Text style={getRssiStyle()}>
+              {rssi < -80 ? "⚠️ " : ""}{rssi} dBm
+            </Text>
+          )}
           <Text style={styles.timerText}>{formatTime(sessionSeconds)}</Text>
         </>
       )}
-      {errorMessage && status !== 'connected' ? (
+      {errorMessage && status !== "connected" ? (
         <Text style={styles.errorText} numberOfLines={1}>
           {errorMessage}
         </Text>
@@ -89,12 +109,12 @@ export const ConnectionStatusBar = memo(function ConnectionStatusBar({
 
 const styles = StyleSheet.create({
   container: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
     paddingHorizontal: 10,
     paddingVertical: 4,
-    backgroundColor: 'rgba(0,0,0,0.45)',
+    backgroundColor: "rgba(0,0,0,0.45)",
     borderRadius: 20,
   },
   dot: {
@@ -104,24 +124,37 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: "800",
     letterSpacing: 0.8,
   },
   addressText: {
     fontSize: 11,
-    color: 'rgba(255,255,255,0.45)',
-    fontFamily: 'monospace',
+    color: "rgba(255,255,255,0.45)",
+    fontFamily: "monospace",
+    marginLeft: 2,
+  },
+  rssiText: {
+    fontSize: 10,
+    color: "rgba(255,255,255,0.45)",
+    fontFamily: "monospace",
+    marginLeft: 2,
+  },
+  rssiWeak: {
+    fontSize: 10,
+    color: "#f1943a",
+    fontFamily: "monospace",
+    fontWeight: "700",
     marginLeft: 2,
   },
   timerText: {
     fontSize: 11,
-    color: 'rgba(255,255,255,0.6)',
-    fontFamily: 'monospace',
-    fontWeight: '700',
+    color: "rgba(255,255,255,0.6)",
+    fontFamily: "monospace",
+    fontWeight: "700",
   },
   errorText: {
     fontSize: 11,
-    color: '#d14a3f',
+    color: "#d14a3f",
     flexShrink: 1,
   },
 });

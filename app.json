@@ -8,9 +8,15 @@
     "scheme": "controllerrobot",
     "userInterfaceStyle": "dark",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "This app requires Bluetooth access to connect to your ESP32 gamepad controller.",
+        "NSBluetoothPeripheralUsageDescription": "This app requires Bluetooth access to connect to your ESP32 gamepad controller."
+      },
+      "bundleIdentifier": "com.anonymous.controllerreactnative"
     },
     "android": {
+      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -18,7 +24,18 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.controllerreactnative"
+      "package": "com.anonymous.controllerreactnative",
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_WIFI_STATE",
+        "android.permission.CHANGE_WIFI_STATE",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "output": "static",
@@ -26,6 +43,7 @@
     },
     "plugins": [
       "expo-router",
+      "react-native-ble-plx",
       [
         "expo-splash-screen",
         {

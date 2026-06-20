@@ -22,17 +22,23 @@ export type GamepadPayload = {
   RX: number;
   RY: number;
   BTN: ButtonId[];
-  DPAD: DPadDirection | null;
+  DPAD: DPadDirection | '';
 };
 
+export type ConnectionMode = 'wifi' | 'bluetooth';
+
 export type ConnectionSettings = {
+  mode: ConnectionMode;
   host: string;
   port: number;
+  deviceId: string;
+  deviceName: string;
 };
 
 export type ConnectionStatus =
   | 'disconnected'
   | 'connecting'
+  | 'authenticating'
   | 'connected'
   | 'reconnecting'
   | 'error';
@@ -45,6 +51,9 @@ export const EMPTY_GAMEPAD_STATE: GamepadState = {
 };
 
 export const DEFAULT_CONNECTION_SETTINGS: ConnectionSettings = {
+  mode: 'wifi',
   host: '192.168.4.1',
   port: 81,
+  deviceId: '',
+  deviceName: 'ESP32-Gamepad',
 };

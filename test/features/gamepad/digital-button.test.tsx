@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react-native";
+import { render, screen, fireEvent, act } from "@testing-library/react-native";
 import { View } from "react-native";
 import { DigitalButton } from "@/features/gamepad/gamepad-controls";
 import { MultiTouchProvider } from "@/hooks/useMultiTouch";
@@ -6,11 +6,11 @@ import { MultiTouchProvider } from "@/hooks/useMultiTouch";
 const mockOnPressIn = jest.fn();
 const mockOnPressOut = jest.fn();
 
-// Mock measureInWindow to simulate layout position in window
+// Mock measure to simulate layout position relative to root view
 beforeAll(() => {
-  jest.spyOn(View.prototype, "measureInWindow").mockImplementation((cb) => {
-    // x=10, y=20, width=100, height=50
-    cb(10, 20, 100, 50);
+  jest.spyOn(View.prototype, "measure").mockImplementation((cb) => {
+    // x=0, y=0, width=100, height=50, pageX=10, pageY=20
+    cb(0, 0, 100, 50, 10, 20);
   });
 });
 
@@ -23,8 +23,8 @@ describe("DigitalButton", () => {
     jest.clearAllMocks();
   });
 
-  it("renders correctly", () => {
-    render(
+  it("renders correctly", async () => {
+    await render(
       <MultiTouchProvider>
         <DigitalButton
           label="A"
@@ -41,8 +41,8 @@ describe("DigitalButton", () => {
     expect(button).toBeTruthy();
   });
 
-  it("handles press and release via multi-touch dispatcher", () => {
-    const { getByTestId } = render(
+  it("handles press and release via multi-touch dispatcher", async () => {
+    const { getByTestId } = await render(
       <MultiTouchProvider testID="provider">
         <DigitalButton
           label="A"
@@ -59,29 +59,35 @@ describe("DigitalButton", () => {
 
     // Layout layout event to trigger measureInWindow
     const buttonView = screen.getByText("A").parent;
-    fireEvent(buttonView, "layout", {
-      nativeEvent: { layout: { x: 0, y: 0, width: 100, height: 50 } },
+    await act(async () => {
+      fireEvent(buttonView!, "layout", {
+        nativeEvent: { layout: { x: 0, y: 0, width: 100, height: 50 } },
+      });
     });
 
     // Touch start inside button bounds (10..110, 20..70)
-    fireEvent(provider, "touchStart", {
-      nativeEvent: {
-        changedTouches: [{ identifier: 1, pageX: 15, pageY: 25 }],
-      },
+    await act(async () => {
+      fireEvent(provider, "touchStart", {
+        nativeEvent: {
+          changedTouches: [{ identifier: 1, pageX: 15, pageY: 25 }],
+        },
+      });
     });
     expect(mockOnPressIn).toHaveBeenCalled();
 
     // Touch end for same identifier
-    fireEvent(provider, "touchEnd", {
-      nativeEvent: {
-        changedTouches: [{ identifier: 1, pageX: 15, pageY: 25 }],
-      },
+    await act(async () => {
+      fireEvent(provider, "touchEnd", {
+        nativeEvent: {
+          changedTouches: [{ identifier: 1, pageX: 15, pageY: 25 }],
+        },
+      });
     });
     expect(mockOnPressOut).toHaveBeenCalled();
   });
 
-  it("shows correct active state", () => {
-    render(
+  it("shows correct active state", async () => {
+    await render(
       <MultiTouchProvider>
         <DigitalButton
           label="A"
