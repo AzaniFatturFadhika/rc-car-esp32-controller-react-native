@@ -148,7 +148,7 @@ export default function GamepadScreen() {
     const R = Math.round(gamepadState.rightStick.y);
     const dpad = gamepadState.dpad || "";
 
-    const { lx, ly, rx } = mixTankDrive(L, R);
+    const { lx, ly, rx } = mixTankDrive(R, L);
 
     if (isBinaryProtocol) {
       const cmd = buildBinaryCommand(lx, ly, rx, 0, dpad);
@@ -189,7 +189,7 @@ export default function GamepadScreen() {
       const R = gamepadState.rightStick.y;
       const dpad = gamepadState.dpad || '';
 
-      const { lx, ly, rx } = mixTankDrive(L, R);
+      const { lx, ly, rx } = mixTankDrive(R, L);
 
       useConnectionStore.getState().sendCommand(lx, ly, rx, 0, dpad);
       lastSentAtRef.current = Date.now();
