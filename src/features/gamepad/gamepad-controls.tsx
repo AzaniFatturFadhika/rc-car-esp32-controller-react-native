@@ -211,6 +211,176 @@ export const AnalogStick = memo(function AnalogStick({
   );
 });
 
+type VerticalSliderProps = {
+  label: string;
+  width: number;
+  height: number;
+  onMove: (value: number) => void;
+  onRelease: () => void;
+};
+
+export const VerticalSlider = memo(function VerticalSlider({
+  label,
+  width,
+  height,
+  onMove,
+  onRelease,
+}: VerticalSliderProps) {
+  const [knobY, setKnobY] = useState(0); // offset from center, range: -halfHeight to halfHeight
+  const halfHeight = height / 2;
+  const knobSize = 40;
+  const trackRange = halfHeight - knobSize / 2;
+
+  const onMoveRef = useRef(onMove);
+  const onReleaseRef = useRef(onRelease);
+
+  useEffect(() => {
+    onMoveRef.current = onMove;
+  }, [onMove]);
+
+  useEffect(() => {
+    onReleaseRef.current = onRelease;
+  }, [onRelease]);
+
+  const containerRef = useRef<View>(null);
+  const measureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [layout, setLayout] = useState<{
+    pageX: number;
+    pageY: number;
+    width: number;
+    height: number;
+  } | null>(null);
+
+  const onLayout = () => {
+    let retries = 0;
+    const doMeasure = () => {
+      containerRef.current?.measure((x, y, w, h, pageX, pageY) => {
+        if (
+          typeof pageX === "number" && !isNaN(pageX) &&
+          typeof pageY === "number" && !isNaN(pageY) &&
+          typeof w === "number" && w > 0 &&
+          typeof h === "number" && h > 0
+        ) {
+          setLayout({ pageX, pageY, width: w, height: h });
+        } else if (retries < 10) {
+          retries++;
+          measureTimeoutRef.current = setTimeout(doMeasure, 50);
+        }
+      });
+    };
+    doMeasure();
+  };
+
+  useEffect(() => {
+    return () => {
+      if (measureTimeoutRef.current) {
+        clearTimeout(measureTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const { registerZone } = useMultiTouchContext();
+
+  useEffect(() => {
+    if (!layout) return;
+
+    const cy = layout.pageY + layout.height / 2;
+    let activeId: string | number | null = null;
+    let lastValue = 0;
+
+    const hitTest = (x: number, y: number) => {
+      return (
+        x >= layout.pageX &&
+        x <= layout.pageX + layout.width &&
+        y >= layout.pageY &&
+        y <= layout.pageY + layout.height
+      );
+    };
+
+    const handleStart = (id: string | number, x: number, y: number) => {
+      if (activeId !== null) return;
+      activeId = id;
+      handleMove(id, x, y);
+    };
+
+    const handleMove = (id: string | number, x: number, y: number) => {
+      if (activeId !== id) return;
+
+      const dy = y - cy;
+      const limitedDy = clamp(dy, -trackRange, trackRange);
+
+      setKnobY(limitedDy);
+
+      // Invert so dragging UP produces positive values, DOWN produces negative values
+      // -100 to 100
+      const rawVal = Math.round((-limitedDy / trackRange) * 100);
+      const val = Math.abs(rawVal) >= 5 ? rawVal : 0; // deadzone
+
+      if (val !== lastValue) {
+        lastValue = val;
+        onMoveRef.current(val);
+      }
+    };
+
+    const handleEnd = (id: string | number) => {
+      if (activeId !== id) return;
+      activeId = null;
+      setKnobY(0);
+      lastValue = 0;
+      onReleaseRef.current();
+    };
+
+    const unsubscribe = registerZone({
+      id: `slider-${label}`,
+      hitTest,
+      onStart: handleStart,
+      onMove: handleMove,
+      onEnd: handleEnd,
+    });
+
+    return unsubscribe;
+  }, [layout, trackRange, registerZone, label]);
+
+  const dynamicStyles = useMemo(
+    () => ({
+      track: { width, height, borderRadius: 10 },
+      knob: {
+        width: width - 4,
+        height: knobSize,
+        borderRadius: 8,
+        transform: [{ translateY: knobY }],
+      },
+    }),
+    [knobY, width, height]
+  );
+
+  return (
+    <View style={styles.stickWrap}>
+      <View
+        ref={containerRef}
+        onLayout={onLayout}
+        pointerEvents="none"
+        accessible
+        accessibilityLabel={`${label} slider`}
+        accessibilityRole="adjustable"
+        style={[styles.stickTrack, dynamicStyles.track, { backgroundColor: '#1d2136' }]}
+      >
+        {/* Zero Center Line */}
+        <View style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          height: 1,
+          backgroundColor: 'rgba(255, 255, 255, 0.15)',
+        }} />
+        <View style={[styles.stickKnob, dynamicStyles.knob]}>
+          <Text style={[styles.stickLabel, { fontSize: 10 }]}>{label}</Text>
+        </View>
+      </View>
+    </View>
+  );
+});
+
 export const DigitalButton = memo(function DigitalButton({
   label,
   accessibilityLabel,

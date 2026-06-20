@@ -26,7 +26,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ConnectionStatusBar } from "@/features/gamepad/connection-status-bar";
 import {
-    AnalogStick,
+    VerticalSlider,
     buttonIsActive,
     DigitalButton,
     DPad,
@@ -48,6 +48,30 @@ import { useConnectionStore } from "@/store/connectionStore";
 import { buildBinaryCommand } from "@/services/protocol";
 import { TelemetryDisplay } from "@/features/gamepad/telemetry-display";
 import { MultiTouchProvider } from "@/hooks/useMultiTouch";
+
+// ─── Tank Drive Mixer ────────────────────────────────────────────────────────
+
+function mixTankDrive(L: number, R: number): { lx: number; ly: number; rx: number } {
+  let lx = 0;
+  let ly = 0;
+  let rx = 0;
+
+  if (L * R < 0) {
+    // Opposite signs: Spin in place using rx
+    rx = Math.round((L - R) / 2);
+  } else {
+    // Same signs (or one is zero)
+    if (Math.abs(L) >= Math.abs(R)) {
+      ly = -L;
+      lx = L !== 0 ? Math.round(100 * (1 - R / L)) : 0;
+    } else {
+      ly = -R;
+      lx = R !== 0 ? Math.round(100 * (L / R - 1)) : 0;
+    }
+  }
+
+  return { lx, ly, rx };
+}
 
 // ─── Reducer ─────────────────────────────────────────────────────────────────
 
@@ -120,14 +144,14 @@ export default function GamepadScreen() {
 
   // Serialise payload only when state changes.
   const payloadMessage = useMemo(() => {
-    const lx = Math.round(gamepadState.leftStick.x);
-    const ly = Math.round(gamepadState.leftStick.y);
-    const rx = Math.round(gamepadState.rightStick.x);
-    const ry = Math.round(gamepadState.rightStick.y);
+    const L = Math.round(gamepadState.leftStick.y);
+    const R = Math.round(gamepadState.rightStick.y);
     const dpad = gamepadState.dpad || "";
 
+    const { lx, ly, rx } = mixTankDrive(L, R);
+
     if (isBinaryProtocol) {
-      const cmd = buildBinaryCommand(lx, ly, rx, ry, dpad);
+      const cmd = buildBinaryCommand(lx, ly, rx, 0, dpad);
       const hex = Array.from(cmd)
         .map((b) => b.toString(16).padStart(2, "0").toUpperCase())
         .join(" ");
@@ -139,13 +163,11 @@ export default function GamepadScreen() {
       lx,
       ly,
       rx,
-      ry,
+      ry: 0,
       dpad,
     });
   }, [
-    gamepadState.leftStick.x,
     gamepadState.leftStick.y,
-    gamepadState.rightStick.x,
     gamepadState.rightStick.y,
     gamepadState.dpad,
     isBinaryProtocol
@@ -163,19 +185,17 @@ export default function GamepadScreen() {
 
     sendTimerRef.current = setTimeout(() => {
       sendTimerRef.current = null;
-      const lx = gamepadState.leftStick.x;
-      const ly = gamepadState.leftStick.y;
-      const rx = gamepadState.rightStick.x;
-      const ry = gamepadState.rightStick.y;
+      const L = gamepadState.leftStick.y;
+      const R = gamepadState.rightStick.y;
       const dpad = gamepadState.dpad || '';
 
-      useConnectionStore.getState().sendCommand(lx, ly, rx, ry, dpad);
+      const { lx, ly, rx } = mixTankDrive(L, R);
+
+      useConnectionStore.getState().sendCommand(lx, ly, rx, 0, dpad);
       lastSentAtRef.current = Date.now();
     }, wait);
   }, [
-    gamepadState.leftStick.x,
     gamepadState.leftStick.y,
-    gamepadState.rightStick.x,
     gamepadState.rightStick.y,
     gamepadState.dpad
   ]);
@@ -301,19 +321,19 @@ export default function GamepadScreen() {
     dispatch({ type: "RELEASE_BUTTON", button });
   }, []);
 
-  const handleLeftStickMove = useCallback((x: number, y: number) => {
-    dispatch({ type: "MOVE_LEFT_STICK", x, y });
+  const handleLeftSliderMove = useCallback((value: number) => {
+    dispatch({ type: "MOVE_LEFT_STICK", x: 0, y: value });
   }, []);
 
-  const handleLeftStickRelease = useCallback(() => {
+  const handleLeftSliderRelease = useCallback(() => {
     dispatch({ type: "RELEASE_LEFT_STICK" });
   }, []);
 
-  const handleRightStickMove = useCallback((x: number, y: number) => {
-    dispatch({ type: "MOVE_RIGHT_STICK", x, y });
+  const handleRightSliderMove = useCallback((value: number) => {
+    dispatch({ type: "MOVE_RIGHT_STICK", x: 0, y: value });
   }, []);
 
-  const handleRightStickRelease = useCallback(() => {
+  const handleRightSliderRelease = useCallback(() => {
     dispatch({ type: "RELEASE_RIGHT_STICK" });
   }, []);
 
@@ -384,12 +404,12 @@ export default function GamepadScreen() {
                 activeDirection={gamepadState.dpad}
                 onDirectionChange={handleDPadChange}
               />
-              <AnalogStick
-                label="L"
-                size={120}
-                knobSize={52}
-                onMove={handleLeftStickMove}
-                onRelease={handleLeftStickRelease}
+              <VerticalSlider
+                label="L MOTOR"
+                width={50}
+                height={130}
+                onMove={handleLeftSliderMove}
+                onRelease={handleLeftSliderRelease}
               />
             </View>
 
@@ -472,12 +492,12 @@ export default function GamepadScreen() {
             </View>
 
             <View style={styles.rightMiddle}>
-              <AnalogStick
-                label="R"
-                size={120}
-                knobSize={52}
-                onMove={handleRightStickMove}
-                onRelease={handleRightStickRelease}
+              <VerticalSlider
+                label="R MOTOR"
+                width={50}
+                height={130}
+                onMove={handleRightSliderMove}
+                onRelease={handleRightSliderRelease}
               />
 
               {/* ABXY cluster */}
