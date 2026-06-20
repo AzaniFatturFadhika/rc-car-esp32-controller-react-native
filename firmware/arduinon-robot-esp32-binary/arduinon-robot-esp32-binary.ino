@@ -459,14 +459,10 @@ void wsEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t len) {
     }
 }
 
-#if __has_include("NimBLECppVersion.h")
-#include "NimBLECppVersion.h"
-#endif
-
 std::string bleRxBuf = "";
 
 class BleCharCB : public NimBLECharacteristicCallbacks {
-    void handleWrite(NimBLECharacteristic* pChar) {
+    void onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) override {
         NimBLEAttValue val = pChar->getValue();
         if (val.length() > 0) {
             // Jika paket adalah command biner utuh (header 0xAA dan panjang 7 byte), bypass buffer
@@ -486,20 +482,9 @@ class BleCharCB : public NimBLECharacteristicCallbacks {
             }
         }
     }
-
-#if defined(NIMBLE_CPP_VER_MAJOR) && NIMBLE_CPP_VER_MAJOR >= 2
-    void onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) override {
-        handleWrite(pChar);
-    }
-#else
-    void onWrite(NimBLECharacteristic* pChar) override {
-        handleWrite(pChar);
-    }
-#endif
 };
 
 class BleServCB : public NimBLEServerCallbacks {
-#if defined(NIMBLE_CPP_VER_MAJOR) && NIMBLE_CPP_VER_MAJOR >= 2
     void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override { 
         ESP_LOGI(TAG, "BLE Client Connected.");
         lastBleAct = lastHB = millis(); 
@@ -509,17 +494,6 @@ class BleServCB : public NimBLEServerCallbacks {
         bleRxBuf = "";
         NimBLEDevice::startAdvertising(); 
     }
-#else
-    void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) override { 
-        ESP_LOGI(TAG, "BLE Client Connected.");
-        lastBleAct = lastHB = millis(); 
-    }
-    void onDisconnect(NimBLEServer* pServer) override { 
-        ESP_LOGW(TAG, "BLE Disconnected.");
-        bleRxBuf = "";
-        NimBLEDevice::startAdvertising(); 
-    }
-#endif
 };
 
 // ============================================================
