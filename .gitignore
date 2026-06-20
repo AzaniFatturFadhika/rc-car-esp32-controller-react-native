@@ -31,6 +31,7 @@ yarn-error.*
 *.pem
 
 # local env files
+.env
 .env*.local
 
 # typescript
@@ -39,5 +40,16 @@ yarn-error.*
 example
 
 # generated native folders
+.android/
 /ios
 /android
+
+# Editor
+.vscode/
+
+# cache and build artifacts
+.cache/
+.npm/
+/.jdks/
+/build-*.apk
+*.log

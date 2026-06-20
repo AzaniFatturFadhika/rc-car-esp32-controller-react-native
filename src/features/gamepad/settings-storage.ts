@@ -14,11 +14,19 @@ export async function loadConnectionSettings(): Promise<ConnectionSettings> {
   try {
     const parsed = JSON.parse(rawSettings) as Partial<ConnectionSettings>;
     return {
+      mode:
+        parsed.mode === 'wifi' || parsed.mode === 'bluetooth'
+          ? parsed.mode
+          : DEFAULT_CONNECTION_SETTINGS.mode,
       host: typeof parsed.host === 'string' ? parsed.host : DEFAULT_CONNECTION_SETTINGS.host,
       port:
         typeof parsed.port === 'number' && Number.isFinite(parsed.port)
           ? parsed.port
           : DEFAULT_CONNECTION_SETTINGS.port,
+      deviceId:
+        typeof parsed.deviceId === 'string' ? parsed.deviceId : DEFAULT_CONNECTION_SETTINGS.deviceId,
+      deviceName:
+        typeof parsed.deviceName === 'string' ? parsed.deviceName : DEFAULT_CONNECTION_SETTINGS.deviceName,
     };
   } catch {
     return DEFAULT_CONNECTION_SETTINGS;

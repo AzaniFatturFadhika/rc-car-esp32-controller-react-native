@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useRef, useCallback } from "react";
+import React, { createContext, useContext, useRef, useCallback, useEffect } from "react";
 import { View, StyleSheet, GestureResponderEvent, ViewProps } from "react-native";
 
 export interface TouchZone {
@@ -43,6 +43,15 @@ export function MultiTouchProvider({
       zonesRef.current = zonesRef.current.filter((z) => z.id !== zone.id);
     };
   }, []);
+
+  useEffect(() => {
+    if (!enabled) {
+      registry.current.forEach((zone, identifier) => {
+        zone.onEnd(identifier);
+      });
+      registry.current.clear();
+    }
+  }, [enabled]);
 
   const onTouchStart = useCallback(
     (e: GestureResponderEvent) => {

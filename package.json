@@ -5,6 +5,7 @@
   "dependencies": {
     "@expo/ui": "~56.0.18",
     "@react-native-async-storage/async-storage": "2.2.0",
+    "buffer": "^6.0.3",
     "expo": "~56.0.12",
     "expo-constants": "~56.0.18",
     "expo-device": "~56.0.4",
@@ -24,29 +25,38 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.85.3",
+    "react-native-ble-plx": "^3.5.1",
     "react-native-gesture-handler": "~2.31.1",
     "react-native-reanimated": "4.3.1",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "4.25.2",
     "react-native-web": "~0.21.0",
-    "react-native-worklets": "0.8.3"
+    "react-native-worklets": "0.8.3",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@react-native/jest-preset": "^0.85.0",
+    "@testing-library/react-native": "^14.0.0",
     "@types/jest": "29.5.14",
     "@types/react": "~19.2.2",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~56.0.4",
     "jest": "^29.7.0",
+    "jest-expo": "^56.0.5",
+    "test-renderer": "^1.2.0",
     "typescript": "~6.0.3"
   },
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo run:android",
+    "android:debug": "expo start --android",
+    "android:reverse": "adb reverse tcp:8081 tcp:8081",
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test": "jest"
+    "test": "jest",
+    "build:apk": "TMPDIR=$HOME/eas-tmp TMP=$HOME/eas-tmp TEMP=$HOME/eas-tmp GRADLE_OPTS=\"-Djava.net.preferIPv4Stack=true\" JAVA_OPTS=\"-Djava.net.preferIPv4Stack=true\" JAVA_HOME=$PWD/.jdks/jdk-17.0.19+10 ANDROID_HOME=$HOME/Android/Sdk eas build --platform android --local --profile preview"
   },
   "private": true
 }

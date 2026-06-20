@@ -20,22 +20,18 @@ import {
     useRef,
     useState,
 } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View, Animated } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ConnectionStatusBar } from "@/features/gamepad/connection-status-bar";
 import {
-    AnalogStick,
+    VerticalSlider,
     buttonIsActive,
     DigitalButton,
     DPad,
     getActionVariant
 } from "@/features/gamepad/gamepad-controls";
-import {
-    encodeGamepadPayload,
-    serializeGamepadPayload,
-} from "@/features/gamepad/protocol";
 import { SettingsSheet } from "@/features/gamepad/settings-sheet";
 import { loadConnectionSettings } from "@/features/gamepad/settings-storage";
 import type {
@@ -48,8 +44,46 @@ import {
     DEFAULT_CONNECTION_SETTINGS,
     EMPTY_GAMEPAD_STATE,
 } from "@/features/gamepad/types";
-import { useWifiTransport } from "@/features/gamepad/use-wifi-transport";
+import { useConnectionStore } from "@/store/connectionStore";
+import { buildBinaryCommand } from "@/services/protocol";
 import { MultiTouchProvider } from "@/hooks/useMultiTouch";
+
+// ─── Tank Drive Mixer ────────────────────────────────────────────────────────
+
+function mixTankDrive(L: number, R: number): { lx: number; ly: number; rx: number } {
+  // L is Left Slider, R is Right Slider
+  // Since the user's motor channels are swapped on the physical robot, we map:
+  // - Left Motor channel of ESP32 (tL) should be controlled by Right Slider (R)
+  // - Right Motor channel of ESP32 (tR) should be controlled by Left Slider (L)
+  const target_tL = R;
+  const target_tR = L;
+
+  let lx = 0;
+  let ly = 0;
+  let rx = 0;
+
+  if (target_tL * target_tR < 0) {
+    // Opposite signs: Spin in place
+    // ESP32 expects: tL = rx, tR = -rx
+    // We want: tL = target_tL, tR = target_tR
+    rx = target_tL;
+  } else {
+    // Same signs (or one is zero)
+    if (Math.abs(target_tL) >= Math.abs(target_tR)) {
+      // ESP32 expects: tL = fwd (where fwd = -ly), so ly = -tL
+      // tR = fwd * (100 - lx) / 100
+      ly = -target_tL;
+      lx = target_tL !== 0 ? Math.round(100 * (1 - target_tR / target_tL)) : 0;
+    } else {
+      // ESP32 expects: tR = fwd (where fwd = -ly), so ly = -tR
+      // tL = fwd * (100 + lx) / 100
+      ly = -target_tR;
+      lx = target_tR !== 0 ? Math.round(100 * (target_tL / target_tR - 1)) : 0;
+    }
+  }
+
+  return { lx, ly, rx };
+}
 
 // ─── Reducer ─────────────────────────────────────────────────────────────────
 
@@ -103,22 +137,112 @@ export default function GamepadScreen() {
   const [connectionSettings, setConnectionSettings] =
     useState<ConnectionSettings>(DEFAULT_CONNECTION_SETTINGS);
 
-
-
   // Session timer
   const [sessionSeconds, setSessionSeconds] = useState(0);
   const sessionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
   );
 
-  // Serialise payload only when state changes.
-  const payloadMessage = useMemo(
-    () => encodeGamepadPayload(serializeGamepadPayload(gamepadState)),
-    [gamepadState],
-  );
+  // Connect Zustand connectionStore
+  const {
+    connectionStatus: status,
+    errorMessage,
+    rssi,
+    connectWiFi,
+    connectBLE,
+    disconnect,
+    isBinaryProtocol
+  } = useConnectionStore();
 
-  const { status, errorMessage, connect, disconnect } =
-    useWifiTransport(payloadMessage);
+  // Serialise payload only when state changes.
+  const payloadMessage = useMemo(() => {
+    const L = Math.round(gamepadState.leftStick.y);
+    const R = Math.round(gamepadState.rightStick.y);
+    const dpad = gamepadState.dpad || "";
+
+    const { lx, ly, rx } = mixTankDrive(L, R);
+
+    if (isBinaryProtocol) {
+      const cmd = buildBinaryCommand(lx, ly, rx, 0, dpad);
+      const hex = Array.from(cmd)
+        .map((b) => b.toString(16).padStart(2, "0").toUpperCase())
+        .join(" ");
+      return `BIN: ${hex}`;
+    }
+
+    return JSON.stringify({
+      type: "CMD",
+      lx,
+      ly,
+      rx,
+      ry: 0,
+      dpad,
+    });
+  }, [
+    gamepadState.leftStick.y,
+    gamepadState.rightStick.y,
+    gamepadState.dpad,
+    isBinaryProtocol
+  ]);
+
+  // Continuous sender loop with state change detection to prevent watchdog timeout without flooding the BLE channel
+  const lastValuesRef = useRef({ lx: 0, ly: 0, rx: 0, dpad: '' });
+  const lastSentTimeRef = useRef(0);
+
+  useEffect(() => {
+    let active = true;
+    const sendLoop = () => {
+      if (!active) return;
+
+      const L = gamepadState.leftStick.y;
+      const R = gamepadState.rightStick.y;
+      const dpad = gamepadState.dpad || '';
+
+      const { lx, ly, rx } = mixTankDrive(L, R);
+      
+      const now = Date.now();
+      const timeElapsed = now - lastSentTimeRef.current;
+      const isIdle = lx === 0 && ly === 0 && rx === 0 && dpad === '';
+      
+      const changed = lx !== lastValuesRef.current.lx || 
+                      ly !== lastValuesRef.current.ly || 
+                      rx !== lastValuesRef.current.rx || 
+                      dpad !== lastValuesRef.current.dpad;
+
+      let shouldSend = false;
+      if (changed) {
+        if (isIdle) {
+          // Instantly send stop command when returning to idle
+          shouldSend = true;
+        } else if (timeElapsed >= 30) {
+          // Throttle active movement commands to 30ms to prevent BLE congestion
+          shouldSend = true;
+        }
+      } else if (!isIdle && timeElapsed >= 150) {
+        // Keep-alive packet when holding slider still
+        shouldSend = true;
+      }
+
+      if (shouldSend) {
+        useConnectionStore.getState().sendCommand(lx, ly, rx, 0, dpad);
+        lastValuesRef.current = { lx, ly, rx, dpad };
+        lastSentTimeRef.current = now;
+      }
+
+      // Poll at 16ms for 60Hz responsiveness, but only transmit on changes or keep-alive interval
+      setTimeout(sendLoop, 16);
+    };
+
+    sendLoop();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    gamepadState.leftStick.y,
+    gamepadState.rightStick.y,
+    gamepadState.dpad
+  ]);
 
   // Keep screen on while connected.
   useEffect(() => {
@@ -172,6 +296,60 @@ export default function GamepadScreen() {
       .catch(() => null);
   }, []);
 
+  // Toast notification state and animation
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [fadeAnim] = useState(() => new Animated.Value(0));
+
+  const showToast = useCallback((message: string) => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    setToastMessage(message);
+
+    // Fade In
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+
+    toastTimeoutRef.current = setTimeout(() => {
+      // Fade Out
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }).start(() => {
+        setToastMessage(null);
+      });
+      toastTimeoutRef.current = null;
+    }, 3000);
+  }, [fadeAnim]);
+
+  // Trigger haptics and toast on status changes
+  const prevStatusRef = useRef(status);
+  useEffect(() => {
+    if (status === prevStatusRef.current) return;
+
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+
+    if (status === "connected") {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => null);
+      setTimeout(() => showToast("ESP32 Gamepad Connected successfully! 🚀"), 0);
+    } else if (status === "reconnecting") {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => null);
+      setTimeout(() => showToast("Connection lost. Reconnecting... 🔄"), 0);
+    } else if (status === "error") {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => null);
+      setTimeout(() => showToast(errorMessage || "Connection failed. Please check setup. ❌"), 0);
+    } else if (status === "disconnected" && prev === "connected") {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => null);
+      setTimeout(() => showToast("Disconnected from ESP32."), 0);
+    }
+  }, [status, errorMessage, showToast]);
+
   // ─── Dispatcher helpers ───────────────────────────────────────────────────
 
   const handlePressButton = useCallback((button: ButtonId) => {
@@ -183,19 +361,19 @@ export default function GamepadScreen() {
     dispatch({ type: "RELEASE_BUTTON", button });
   }, []);
 
-  const handleLeftStickMove = useCallback((x: number, y: number) => {
-    dispatch({ type: "MOVE_LEFT_STICK", x, y });
+  const handleLeftSliderMove = useCallback((value: number) => {
+    dispatch({ type: "MOVE_LEFT_STICK", x: 0, y: value });
   }, []);
 
-  const handleLeftStickRelease = useCallback(() => {
+  const handleLeftSliderRelease = useCallback(() => {
     dispatch({ type: "RELEASE_LEFT_STICK" });
   }, []);
 
-  const handleRightStickMove = useCallback((x: number, y: number) => {
-    dispatch({ type: "MOVE_RIGHT_STICK", x, y });
+  const handleRightSliderMove = useCallback((value: number) => {
+    dispatch({ type: "MOVE_RIGHT_STICK", x: 0, y: value });
   }, []);
 
-  const handleRightStickRelease = useCallback(() => {
+  const handleRightSliderRelease = useCallback(() => {
     dispatch({ type: "RELEASE_RIGHT_STICK" });
   }, []);
 
@@ -206,9 +384,13 @@ export default function GamepadScreen() {
   const handleConnect = useCallback(
     (settings: ConnectionSettings) => {
       setConnectionSettings(settings);
-      connect(settings);
+      if (settings.mode === "wifi") {
+        connectWiFi(settings.host, settings.port);
+      } else {
+        connectBLE(settings.deviceId, settings.deviceName);
+      }
     },
-    [connect],
+    [connectWiFi, connectBLE],
   );
 
   const togglePayloadDebug = useCallback(() => {
@@ -221,6 +403,11 @@ export default function GamepadScreen() {
 
   return (
     <GestureHandlerRootView style={styles.root}>
+      {toastMessage && (
+        <Animated.View style={[styles.toastContainer, { opacity: fadeAnim }]}>
+          <Text style={styles.toastText}>{toastMessage}</Text>
+        </Animated.View>
+      )}
       <MultiTouchProvider
         enabled={!settingsVisible}
         style={styles.background}
@@ -257,12 +444,12 @@ export default function GamepadScreen() {
                 activeDirection={gamepadState.dpad}
                 onDirectionChange={handleDPadChange}
               />
-              <AnalogStick
-                label="L"
-                size={120}
-                knobSize={52}
-                onMove={handleLeftStickMove}
-                onRelease={handleLeftStickRelease}
+              <VerticalSlider
+                label="L MOTOR"
+                width={50}
+                height={180}
+                onMove={handleLeftSliderMove}
+                onRelease={handleLeftSliderRelease}
               />
             </View>
 
@@ -279,35 +466,35 @@ export default function GamepadScreen() {
           </View>
 
           {/* ── Center Panel ───────────────────────────────── */}
-          <View style={styles.centerPanel}>
+          <View
+            key={`center-${status}-${showPayload}-${errorMessage ? "err" : "ok"}`}
+            style={styles.centerPanel}
+          >
             <ConnectionStatusBar
               status={status}
               errorMessage={errorMessage}
-              host={connectionSettings.host}
-              port={connectionSettings.port}
+              settings={connectionSettings}
               sessionSeconds={sessionSeconds}
+              rssi={rssi}
             />
 
             <View style={styles.centerButtons}>
               <DigitalButton
-                label="VIEW"
-                accessibilityLabel="Toggle payload debug"
-                variant="center"
-                onPressIn={togglePayloadDebug}
-                onPressOut={() => undefined}
-              />
-              <DigitalButton
-                label="⚙"
-                accessibilityLabel="Settings"
-                variant="center"
-                onPressIn={openSettings}
-                onPressOut={() => undefined}
-              />
-              <DigitalButton
-                label="MENU"
+                label="⚙ SETTINGS"
                 accessibilityLabel="Open settings menu"
                 variant="center"
+                size={32}
+                wide={true}
                 onPressIn={openSettings}
+                onPressOut={() => undefined}
+              />
+              <DigitalButton
+                label="CONSOLE"
+                accessibilityLabel="Toggle payload debug"
+                variant="center"
+                size={32}
+                wide={true}
+                onPressIn={togglePayloadDebug}
                 onPressOut={() => undefined}
               />
             </View>
@@ -343,12 +530,12 @@ export default function GamepadScreen() {
             </View>
 
             <View style={styles.rightMiddle}>
-              <AnalogStick
-                label="R"
-                size={120}
-                knobSize={52}
-                onMove={handleRightStickMove}
-                onRelease={handleRightStickRelease}
+              <VerticalSlider
+                label="R MOTOR"
+                width={50}
+                height={180}
+                onMove={handleRightSliderMove}
+                onRelease={handleRightSliderRelease}
               />
 
               {/* ABXY cluster */}
@@ -478,9 +665,10 @@ const styles = StyleSheet.create({
   },
   // ── Center buttons ────────────────────────────────────────────────────────
   centerButtons: {
-    flexDirection: "row",
-    gap: 10,
+    flexDirection: "column",
+    gap: 8,
     alignItems: "center",
+    width: "100%",
   },
   // ── ABXY cluster ─────────────────────────────────────────────────────────
   abxyCluster: {
@@ -503,5 +691,32 @@ const styles = StyleSheet.create({
     fontFamily: "monospace",
     textAlign: "center",
     paddingHorizontal: 4,
+  },
+  // ── Toast Notifications ───────────────────────────────────────────────────
+  toastContainer: {
+    position: "absolute",
+    top: 16,
+    left: 150,
+    right: 150,
+    backgroundColor: "rgba(18, 18, 38, 0.92)",
+    borderColor: "rgba(90, 90, 255, 0.35)",
+    borderWidth: 1,
+    borderRadius: 30,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    zIndex: 9999,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  toastText: {
+    color: "#ffffff",
+    fontSize: 11,
+    fontWeight: "700",
+    textAlign: "center",
   },
 });
