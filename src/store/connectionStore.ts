@@ -2,10 +2,6 @@ import { create } from 'zustand';
 import { connectionManager, ConnectionType, ConnectionStatus } from '../services/ConnectionManager';
 import { buildBinaryCommand } from '../services/protocol';
 
-export interface TelemetryData {
-  speedL: number;
-  speedR: number;
-}
 
 interface ConnectionStoreState {
   // Connection states
@@ -15,9 +11,7 @@ interface ConnectionStoreState {
   isBinaryProtocol: boolean;
   errorMessage: string | null;
   rssi: number | null;
-  
-  // Telemetry
-  telemetry: TelemetryData;
+
   
   // Actions
   connectWiFi: (host: string, port: number) => Promise<void>;
@@ -34,7 +28,6 @@ export const useConnectionStore = create<ConnectionStoreState>((set, get) => ({
   isBinaryProtocol: false,
   errorMessage: null,
   rssi: null,
-  telemetry: { speedL: 0, speedR: 0 },
 
   connectWiFi: async (host, port) => {
     set({ errorMessage: null });
@@ -62,7 +55,6 @@ export const useConnectionStore = create<ConnectionStoreState>((set, get) => ({
       isAuthenticated: false,
       isBinaryProtocol: false,
       rssi: null,
-      telemetry: { speedL: 0, speedR: 0 }
     });
   },
 
@@ -104,16 +96,7 @@ connectionManager.onStatusChange = (status, type) => {
 };
 
 connectionManager.onMessage = (message) => {
-  if (message.type === 'TELEMETRY' || message.type === 'TEL') {
-    const speedL = message.type === 'TEL' ? (message.l ?? 0) : (message.speedL ?? 0);
-    const speedR = message.type === 'TEL' ? (message.r ?? 0) : (message.speedR ?? 0);
-    useConnectionStore.setState({
-      telemetry: {
-        speedL,
-        speedR,
-      }
-    });
-  }
+  // Telemetry removed, other messages ignored or handled externally
 };
 
 connectionManager.onError = (error) => {

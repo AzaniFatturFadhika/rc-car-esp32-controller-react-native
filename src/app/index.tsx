@@ -46,7 +46,6 @@ import {
 } from "@/features/gamepad/types";
 import { useConnectionStore } from "@/store/connectionStore";
 import { buildBinaryCommand } from "@/services/protocol";
-import { TelemetryDisplay } from "@/features/gamepad/telemetry-display";
 import { MultiTouchProvider } from "@/hooks/useMultiTouch";
 
 // ─── Tank Drive Mixer ────────────────────────────────────────────────────────
@@ -478,8 +477,6 @@ export default function GamepadScreen() {
               sessionSeconds={sessionSeconds}
               rssi={rssi}
             />
-
-            <TelemetryDisplay />
 
             <View style={styles.centerButtons}>
               <DigitalButton

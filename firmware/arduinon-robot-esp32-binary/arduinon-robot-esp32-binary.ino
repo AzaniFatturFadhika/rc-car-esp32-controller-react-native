@@ -72,7 +72,7 @@ struct BinaryCmd {
 };
 #pragma pack(pop)
 
-struct Telemetry { float speedL, speedR; uint32_t ts; };
+
 
 struct PID {
     float Kp, Ki, Kd, integral, prevErr, outMin, outMax;
@@ -91,7 +91,6 @@ struct PID {
 // 5. GLOBAL STATE & DIAGNOSTICS
 // ============================================================
 QueueHandle_t cmdQueue;
-SemaphoreHandle_t telMutex; 
 WebSocketsServer ws(81);
 NimBLEServer *pServer = nullptr;
 NimBLECharacteristic *pTxChar = nullptr;
@@ -102,7 +101,6 @@ TaskHandle_t netTaskHandle = nullptr;
 PID pidL(KP, KI, KD, -255, 255), pidR(KP, KI, KD, -255, 255);
 pcnt_unit_handle_t pcntL = nullptr, pcntR = nullptr;
 
-Telemetry telemetry = {0};
 uint32_t lastWifiAct = 0, lastBleAct = 0, lastHB = 0;
 bool wsAuth[5] = {false};  
 
@@ -242,10 +240,7 @@ void motorTask(void*) {
         if (invertEncoderL) actL = -actL;
         if (invertEncoderR) actR = -actR;
 
-        if (xSemaphoreTake(telMutex, 0) == pdTRUE) {
-            telemetry.speedL = actL; telemetry.speedR = actR; telemetry.ts = millis();
-            xSemaphoreGive(telMutex);
-        }
+
 
         // 1. Bootstrapping: Auto-detect encoder presence upon receiving the first ticks
         if (!encodersDetectedL && actL != 0) {
@@ -354,19 +349,7 @@ void netTask(void*) {
     ESP_LOGI(TAG, "Core 1 Network Task started.");
 
     while (1) {
-        float sL, sR;
-        if (xSemaphoreTake(telMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-            sL = telemetry.speedL; sR = telemetry.speedR;
-            xSemaphoreGive(telMutex);
-        }
-        
-        JsonDocument doc;
-        doc["type"] = "TEL"; doc["l"] = sL; doc["r"] = sR;
-        char buf[64]; size_t len = serializeJson(doc, buf);
-        ws.broadcastTXT((uint8_t*)buf, len);
-        if (pTxChar && pServer->getConnectedCount() > 0) {
-            pTxChar->setValue((uint8_t*)buf, len); pTxChar->notify();
-        }
+
 
         if (millis() - lastHB > HB_TIMEOUT && lastHB > 0) {
             ESP_LOGW(TAG, "Heartbeat timeout! Disconnecting all.");
@@ -506,7 +489,6 @@ void setup() {
     ESP_LOGI(TAG, "=== ESP32 RC CAR BOOTING ===");
 
     cmdQueue = xQueueCreate(1, sizeof(BinaryCmd));
-    telMutex = xSemaphoreCreateMutex();
 
     xTaskCreatePinnedToCore(motorTask, "PID", 4096, nullptr, 5, &pidTaskHandle, 0);
     
