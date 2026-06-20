@@ -253,10 +253,13 @@ export class ConnectionManager {
       
       await this.bleDevice.discoverAllServicesAndCharacteristics();
       
-      // Request larger MTU on Android to prevent packet fragmentation/truncation
+      // Request larger MTU and high connection priority on Android to prevent fragmentation and latency
       if (Platform.OS === 'android') {
         console.log('Requesting MTU size 512 for Android...');
         await this.bleDevice.requestMTU(512).catch(err => console.warn('MTU request failed:', err));
+
+        console.log('Requesting high connection priority for Android...');
+        await this.bleDevice.requestConnectionPriority(1).catch(err => console.warn('Connection priority request failed:', err));
       }
       
       // Setup listener on Nordic UART Service TX characteristic
@@ -285,13 +288,14 @@ export class ConnectionManager {
       // Start RSSI polling
       this.startRssiPolling();
 
-      // Send AUTH with a brief delay (500ms) to ensure notification subscription (CCCD write) is fully completed by the OS
+      // Send HB keep-alive and AUTH with a brief delay (150ms) to ensure notification subscription (CCCD write) is fully completed by the OS
       setTimeout(() => {
         if (this.connectionStatus === 'authenticating' && this.connectionType === 'ble') {
-          console.log('Sending BLE AUTH message...');
+          console.log('Sending BLE HB keep-alive and AUTH message...');
+          this.sendMessage({ type: 'HB' });
           this.sendMessage(createAuthMessage());
         }
-      }, 500);
+      }, 150);
 
     } catch (error) {
       console.error('BLE Connection error:', error);
@@ -485,6 +489,15 @@ export class ConnectionManager {
   // ==================== HEARTBEAT ====================
   private startHeartbeat() {
     this.stopHeartbeat();
+
+    // Send an immediate heartbeat to keep the watchdog fresh
+    if (this.connectionStatus === 'connected') {
+      const hbMsg = this.isBinaryProtocol
+        ? createBinaryHeartbeatMessage()
+        : createHeartbeatMessage();
+      this.sendMessage(hbMsg);
+    }
+
     this.heartbeatInterval = setInterval(() => {
       if (this.connectionStatus !== 'connected') return;
 

@@ -52,21 +52,34 @@ import { MultiTouchProvider } from "@/hooks/useMultiTouch";
 // ─── Tank Drive Mixer ────────────────────────────────────────────────────────
 
 function mixTankDrive(L: number, R: number): { lx: number; ly: number; rx: number } {
+  // L is Left Slider, R is Right Slider
+  // Since the user's motor channels are swapped on the physical robot, we map:
+  // - Left Motor channel of ESP32 (tL) should be controlled by Right Slider (R)
+  // - Right Motor channel of ESP32 (tR) should be controlled by Left Slider (L)
+  const target_tL = R;
+  const target_tR = L;
+
   let lx = 0;
   let ly = 0;
   let rx = 0;
 
-  if (L * R < 0) {
-    // Opposite signs: Spin in place using rx
-    rx = Math.round((L - R) / 2);
+  if (target_tL * target_tR < 0) {
+    // Opposite signs: Spin in place
+    // ESP32 expects: tL = rx, tR = -rx
+    // We want: tL = target_tL, tR = target_tR
+    rx = target_tL;
   } else {
     // Same signs (or one is zero)
-    if (Math.abs(L) >= Math.abs(R)) {
-      ly = -L;
-      lx = L !== 0 ? Math.round(100 * (1 - R / L)) : 0;
+    if (Math.abs(target_tL) >= Math.abs(target_tR)) {
+      // ESP32 expects: tL = fwd (where fwd = -ly), so ly = -tL
+      // tR = fwd * (100 - lx) / 100
+      ly = -target_tL;
+      lx = target_tL !== 0 ? Math.round(100 * (1 - target_tR / target_tL)) : 0;
     } else {
-      ly = -R;
-      lx = R !== 0 ? Math.round(100 * (L / R - 1)) : 0;
+      // ESP32 expects: tR = fwd (where fwd = -ly), so ly = -tR
+      // tL = fwd * (100 + lx) / 100
+      ly = -target_tR;
+      lx = target_tR !== 0 ? Math.round(100 * (target_tL / target_tR - 1)) : 0;
     }
   }
 
@@ -148,7 +161,7 @@ export default function GamepadScreen() {
     const R = Math.round(gamepadState.rightStick.y);
     const dpad = gamepadState.dpad || "";
 
-    const { lx, ly, rx } = mixTankDrive(R, L);
+    const { lx, ly, rx } = mixTankDrive(L, R);
 
     if (isBinaryProtocol) {
       const cmd = buildBinaryCommand(lx, ly, rx, 0, dpad);
@@ -173,7 +186,10 @@ export default function GamepadScreen() {
     isBinaryProtocol
   ]);
 
-  // Continuous sender loop to prevent ESP32 motor watchdog timeout
+  // Continuous sender loop with state change detection to prevent watchdog timeout without flooding the BLE channel
+  const lastValuesRef = useRef({ lx: 0, ly: 0, rx: 0, dpad: '' });
+  const lastSentTimeRef = useRef(0);
+
   useEffect(() => {
     let active = true;
     const sendLoop = () => {
@@ -183,10 +199,27 @@ export default function GamepadScreen() {
       const R = gamepadState.rightStick.y;
       const dpad = gamepadState.dpad || '';
 
-      const { lx, ly, rx } = mixTankDrive(R, L);
-      useConnectionStore.getState().sendCommand(lx, ly, rx, 0, dpad);
+      const { lx, ly, rx } = mixTankDrive(L, R);
+      
+      const now = Date.now();
+      const changed = lx !== lastValuesRef.current.lx || 
+                      ly !== lastValuesRef.current.ly || 
+                      rx !== lastValuesRef.current.rx || 
+                      dpad !== lastValuesRef.current.dpad;
+      
+      const timeElapsed = now - lastSentTimeRef.current;
+      const isIdle = lx === 0 && ly === 0 && rx === 0 && dpad === '';
 
-      setTimeout(sendLoop, 50); // Send every 50ms (20Hz) to keep watchdog alive
+      // Send immediately on change (including the first transition to 0)
+      // But only send keep-alive packets if the controls are NOT idle!
+      if (changed || (!isIdle && timeElapsed >= 150)) {
+        useConnectionStore.getState().sendCommand(lx, ly, rx, 0, dpad);
+        lastValuesRef.current = { lx, ly, rx, dpad };
+        lastSentTimeRef.current = now;
+      }
+
+      // Poll at 16ms for 60Hz responsiveness, but only transmit on changes or keep-alive interval
+      setTimeout(sendLoop, 16);
     };
 
     sendLoop();
