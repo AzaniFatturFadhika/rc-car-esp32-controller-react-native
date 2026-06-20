@@ -320,7 +320,7 @@ void motorControlTask(void *pvParameters) {
   unsigned long lastCommandTime = millis();
 
   float smoothTargetL = 0.0f, smoothTargetR = 0.0f;
-  int16_t lastTicksL = 0, lastTicksR = 0;
+  int lastTicksL = 0, lastTicksR = 0;
   TickType_t xLastWakeTime = xTaskGetTickCount();
 
   while (1) {
@@ -348,14 +348,14 @@ void motorControlTask(void *pvParameters) {
     int32_t currentTicksL = get_pcnt_count(pcnt_unit_L);
     int32_t currentTicksR = get_pcnt_count(pcnt_unit_R);
     
-    int16_t deltaL = (int16_t)currentTicksL - lastTicksL;
-    int16_t deltaR = (int16_t)currentTicksR - lastTicksR;
+    int16_t deltaL = (int16_t)(currentTicksL - lastTicksL);
+    int16_t deltaR = (int16_t)(currentTicksR - lastTicksR);
     
     float actualSpeedL = (float)deltaL / DT;
     float actualSpeedR = (float)deltaR / DT;
     
-    lastTicksL = (int16_t)currentTicksL;
-    lastTicksR = (int16_t)currentTicksR;
+    lastTicksL = currentTicksL;
+    lastTicksR = currentTicksR;
 
     // Update telemetry data (thread-safe via volatile)
     telemetryData.speedL = actualSpeedL;
