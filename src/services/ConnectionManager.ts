@@ -79,6 +79,14 @@ export class ConnectionManager {
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private rssiInterval: ReturnType<typeof setInterval> | null = null;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private rxBuffer: string = '';
+  
+  // Simulated telemetry properties
+  private simTargetL: number = 0;
+  private simTargetR: number = 0;
+  private simCurrentL: number = 0;
+  private simCurrentR: number = 0;
+  private simTelemetryInterval: ReturnType<typeof setInterval> | null = null;
   
   public connectionType: ConnectionType = 'none';
   public connectionStatus: ConnectionStatus = 'disconnected';
@@ -228,6 +236,7 @@ export class ConnectionManager {
             this.connectionStatus = 'connected';
             this.onStatusChange?.(this.connectionStatus, this.connectionType);
             this.startHeartbeat();
+            this.startSimulatedTelemetry();
             
             // Poll simulated RSSI
             this.rssiInterval = setInterval(() => {
@@ -346,69 +355,98 @@ export class ConnectionManager {
 
   // ==================== MESSAGE HANDLING ====================
   private handleIncomingMessage(data: string) {
-    try {
-      const sanitized = data.replace(/\0/g, '').trim();
-      const message = JSON.parse(sanitized);
-      if (!message || typeof message !== 'object') return;
+    this.rxBuffer += data.replace(/\0/g, '');
 
-      // Auto-detect binary protocol based on message shapes
-      if (
-        message.type === 'AUTH_REQ' ||
-        message.type === 'TEL' ||
-        (message.type === 'AUTH' && message.ok !== undefined)
-      ) {
-        if (!this.isBinaryProtocol) {
-          console.log('Binary protocol detected from ESP32 payload.');
-          this.isBinaryProtocol = true;
-          this.onStatusChange?.(this.connectionStatus, this.connectionType);
-        }
-      } else if (
-        message.type === 'AUTH_REQUIRED' ||
-        message.type === 'AUTH_STATUS' ||
-        message.type === 'TELEMETRY'
-      ) {
-        if (this.isBinaryProtocol) {
-          console.log('Legacy protocol detected from ESP32 payload.');
-          this.isBinaryProtocol = false;
-          this.onStatusChange?.(this.connectionStatus, this.connectionType);
-        }
-      }
-      
-      // Handle AUTH responses
-      if (message.type === 'AUTH_STATUS' || message.type === 'AUTH') {
-        const isSuccess = message.type === 'AUTH_STATUS'
-          ? message.status === 'OK'
-          : message.ok === true;
-
-        if (isSuccess) {
-          console.log('Authentication successful!');
-          this.isAuthenticated = true;
-          this.connectionStatus = 'connected';
-          this.onStatusChange?.(this.connectionStatus, this.connectionType);
-          this.startHeartbeat();
-        } else {
-          console.error('Authentication failed on ESP32');
-          this.connectionStatus = 'error';
-          this.onStatusChange?.(this.connectionStatus, this.connectionType);
-          this.onError?.('Authentication failed');
-          this.disconnect();
-        }
-        return;
+    while (true) {
+      const firstBrace = this.rxBuffer.indexOf('{');
+      if (firstBrace === -1) {
+        this.rxBuffer = '';
+        break;
       }
 
-      // Handle AUTH_REQUIRED
-      if (message.type === 'AUTH_REQUIRED' || message.type === 'AUTH_REQ') {
-        this.sendMessage(createAuthMessage());
-        return;
+      let depth = 0;
+      let matchIdx = -1;
+      for (let i = firstBrace; i < this.rxBuffer.length; i++) {
+        if (this.rxBuffer[i] === '{') depth++;
+        else if (this.rxBuffer[i] === '}') {
+          depth--;
+          if (depth === 0) {
+            matchIdx = i;
+            break;
+          }
+        }
       }
 
-      // Reset missed heartbeats on any valid response
-      this.missedHeartbeats = 0;
+      if (matchIdx === -1) {
+        break;
+      }
 
-      // Forward other messages (e.g. TELEMETRY, TEL, ACK) to callback
-      this.onMessage?.(message);
-    } catch {
-      // Ignore parse errors from partial/malformed frames
+      const jsonStr = this.rxBuffer.substring(firstBrace, matchIdx + 1);
+      this.rxBuffer = this.rxBuffer.substring(matchIdx + 1);
+
+      try {
+        const message = JSON.parse(jsonStr.trim());
+        if (!message || typeof message !== 'object') continue;
+
+        // Auto-detect binary protocol based on message shapes
+        if (
+          message.type === 'AUTH_REQ' ||
+          message.type === 'TEL' ||
+          (message.type === 'AUTH' && message.ok !== undefined)
+        ) {
+          if (!this.isBinaryProtocol) {
+            console.log('Binary protocol detected from ESP32 payload.');
+            this.isBinaryProtocol = true;
+            this.onStatusChange?.(this.connectionStatus, this.connectionType);
+          }
+        } else if (
+          message.type === 'AUTH_REQUIRED' ||
+          message.type === 'AUTH_STATUS' ||
+          message.type === 'TELEMETRY'
+        ) {
+          if (this.isBinaryProtocol) {
+            console.log('Legacy protocol detected from ESP32 payload.');
+            this.isBinaryProtocol = false;
+            this.onStatusChange?.(this.connectionStatus, this.connectionType);
+          }
+        }
+        
+        // Handle AUTH responses
+        if (message.type === 'AUTH_STATUS' || message.type === 'AUTH') {
+          const isSuccess = message.type === 'AUTH_STATUS'
+            ? message.status === 'OK'
+            : message.ok === true;
+
+          if (isSuccess) {
+            console.log('Authentication successful!');
+            this.isAuthenticated = true;
+            this.connectionStatus = 'connected';
+            this.onStatusChange?.(this.connectionStatus, this.connectionType);
+            this.startHeartbeat();
+          } else {
+            console.error('Authentication failed on ESP32');
+            this.connectionStatus = 'error';
+            this.onStatusChange?.(this.connectionStatus, this.connectionType);
+            this.onError?.('Authentication failed');
+            this.disconnect();
+          }
+          continue;
+        }
+
+        // Handle AUTH_REQUIRED
+        if (message.type === 'AUTH_REQUIRED' || message.type === 'AUTH_REQ') {
+          this.sendMessage(createAuthMessage());
+          continue;
+        }
+
+        // Reset missed heartbeats on any valid response
+        this.missedHeartbeats = 0;
+
+        // Forward other messages (e.g. TELEMETRY, TEL, ACK) to callback
+        this.onMessage?.(message);
+      } catch (err) {
+        console.warn('JSON parse error on buffered string:', err);
+      }
     }
   }
 
@@ -432,7 +470,46 @@ export class ConnectionManager {
       
       if (this.connectionType === 'ble') {
         if (this.isSimulatedBLE) {
-          // Log simulated transmissions quietly
+          // Intercept simulated commands to update simulated telemetry speeds
+          if (isBinary) {
+            const bytes = message instanceof ArrayBuffer
+              ? new Uint8Array(message)
+              : new Uint8Array(message.buffer, message.byteOffset, message.byteLength);
+            
+            if (bytes[0] === 0xAA) {
+              const lx = bytes[1] > 127 ? bytes[1] - 256 : bytes[1];
+              const ly = bytes[2] > 127 ? bytes[2] - 256 : bytes[2];
+              const rx = bytes[3] > 127 ? bytes[3] - 256 : bytes[3];
+              
+              let tL = 0, tR = 0;
+              if (rx !== 0) {
+                tL = rx; tR = -rx;
+              } else if (lx !== 0 || ly !== 0) {
+                const fwd = -ly;
+                tL = lx > 0 ? fwd : fwd * (100 + lx) / 100;
+                tR = lx < 0 ? fwd : fwd * (100 - lx) / 100;
+              }
+              this.simTargetL = tL * 1.5;
+              this.simTargetR = tR * 1.5;
+            }
+          } else if (message && typeof message === 'object') {
+            if (message.type === 'CMD') {
+              const lx = message.lx ?? 0;
+              const ly = message.ly ?? 0;
+              const rx = message.rx ?? 0;
+              
+              let tL = 0, tR = 0;
+              if (rx !== 0) {
+                tL = rx; tR = -rx;
+              } else if (lx !== 0 || ly !== 0) {
+                const fwd = -ly;
+                tL = lx > 0 ? fwd : fwd * (100 + lx) / 100;
+                tR = lx < 0 ? fwd : fwd * (100 - lx) / 100;
+              }
+              this.simTargetL = tL * 1.5;
+              this.simTargetR = tR * 1.5;
+            }
+          }
           return true;
         }
         
@@ -546,11 +623,44 @@ export class ConnectionManager {
     }
   }
 
+  // ==================== SIMULATED TELEMETRY ====================
+  private startSimulatedTelemetry() {
+    this.stopSimulatedTelemetry();
+    this.simTargetL = 0;
+    this.simTargetR = 0;
+    this.simCurrentL = 0;
+    this.simCurrentR = 0;
+
+    this.simTelemetryInterval = setInterval(() => {
+      // Smoothly interpolate current speeds to target speeds
+      this.simCurrentL += (this.simTargetL - this.simCurrentL) * 0.25;
+      this.simCurrentR += (this.simTargetR - this.simCurrentR) * 0.25;
+
+      // Add a tiny bit of noise/jitter when moving to look realistic
+      const jitterL = Math.abs(this.simCurrentL) > 2 ? (Math.random() - 0.5) * 4 : 0;
+      const jitterR = Math.abs(this.simCurrentR) > 2 ? (Math.random() - 0.5) * 4 : 0;
+
+      this.onMessage?.({
+        type: 'TEL',
+        l: Math.round(this.simCurrentL + jitterL),
+        r: Math.round(this.simCurrentR + jitterR),
+      });
+    }, 100);
+  }
+
+  private stopSimulatedTelemetry() {
+    if (this.simTelemetryInterval) {
+      clearInterval(this.simTelemetryInterval);
+      this.simTelemetryInterval = null;
+    }
+  }
+
   // ==================== DISCONNECT ====================
   disconnect() {
     console.log('ConnectionManager disconnect called');
     this.stopHeartbeat();
     this.stopRssiPolling();
+    this.stopSimulatedTelemetry();
     
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
@@ -580,6 +690,7 @@ export class ConnectionManager {
     this.isBinaryProtocol = false;
     this.reconnectAttempts = 0;
     this.missedHeartbeats = 0;
+    this.rxBuffer = '';
     
     this.onStatusChange?.(this.connectionStatus, this.connectionType);
     this.onRssiChange?.(null);

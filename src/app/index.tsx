@@ -202,17 +202,29 @@ export default function GamepadScreen() {
       const { lx, ly, rx } = mixTankDrive(L, R);
       
       const now = Date.now();
+      const timeElapsed = now - lastSentTimeRef.current;
+      const isIdle = lx === 0 && ly === 0 && rx === 0 && dpad === '';
+      
       const changed = lx !== lastValuesRef.current.lx || 
                       ly !== lastValuesRef.current.ly || 
                       rx !== lastValuesRef.current.rx || 
                       dpad !== lastValuesRef.current.dpad;
-      
-      const timeElapsed = now - lastSentTimeRef.current;
-      const isIdle = lx === 0 && ly === 0 && rx === 0 && dpad === '';
 
-      // Send immediately on change (including the first transition to 0)
-      // But only send keep-alive packets if the controls are NOT idle!
-      if (changed || (!isIdle && timeElapsed >= 150)) {
+      let shouldSend = false;
+      if (changed) {
+        if (isIdle) {
+          // Instantly send stop command when returning to idle
+          shouldSend = true;
+        } else if (timeElapsed >= 30) {
+          // Throttle active movement commands to 30ms to prevent BLE congestion
+          shouldSend = true;
+        }
+      } else if (!isIdle && timeElapsed >= 150) {
+        // Keep-alive packet when holding slider still
+        shouldSend = true;
+      }
+
+      if (shouldSend) {
         useConnectionStore.getState().sendCommand(lx, ly, rx, 0, dpad);
         lastValuesRef.current = { lx, ly, rx, dpad };
         lastSentTimeRef.current = now;
@@ -436,7 +448,7 @@ export default function GamepadScreen() {
               <VerticalSlider
                 label="L MOTOR"
                 width={50}
-                height={130}
+                height={180}
                 onMove={handleLeftSliderMove}
                 onRelease={handleLeftSliderRelease}
               />
@@ -455,7 +467,10 @@ export default function GamepadScreen() {
           </View>
 
           {/* ── Center Panel ───────────────────────────────── */}
-          <View style={styles.centerPanel}>
+          <View
+            key={`center-${status}-${showPayload}-${errorMessage ? "err" : "ok"}`}
+            style={styles.centerPanel}
+          >
             <ConnectionStatusBar
               status={status}
               errorMessage={errorMessage}
@@ -468,24 +483,21 @@ export default function GamepadScreen() {
 
             <View style={styles.centerButtons}>
               <DigitalButton
-                label="VIEW"
-                accessibilityLabel="Toggle payload debug"
-                variant="center"
-                onPressIn={togglePayloadDebug}
-                onPressOut={() => undefined}
-              />
-              <DigitalButton
-                label="⚙"
-                accessibilityLabel="Settings"
-                variant="center"
-                onPressIn={openSettings}
-                onPressOut={() => undefined}
-              />
-              <DigitalButton
-                label="MENU"
+                label="⚙ SETTINGS"
                 accessibilityLabel="Open settings menu"
                 variant="center"
+                size={32}
+                wide={true}
                 onPressIn={openSettings}
+                onPressOut={() => undefined}
+              />
+              <DigitalButton
+                label="CONSOLE"
+                accessibilityLabel="Toggle payload debug"
+                variant="center"
+                size={32}
+                wide={true}
+                onPressIn={togglePayloadDebug}
                 onPressOut={() => undefined}
               />
             </View>
@@ -524,7 +536,7 @@ export default function GamepadScreen() {
               <VerticalSlider
                 label="R MOTOR"
                 width={50}
-                height={130}
+                height={180}
                 onMove={handleRightSliderMove}
                 onRelease={handleRightSliderRelease}
               />
@@ -656,9 +668,10 @@ const styles = StyleSheet.create({
   },
   // ── Center buttons ────────────────────────────────────────────────────────
   centerButtons: {
-    flexDirection: "row",
-    gap: 10,
+    flexDirection: "column",
+    gap: 8,
     alignItems: "center",
+    width: "100%",
   },
   // ── ABXY cluster ─────────────────────────────────────────────────────────
   abxyCluster: {

@@ -373,9 +373,7 @@ export const VerticalSlider = memo(function VerticalSlider({
           height: 1,
           backgroundColor: 'rgba(255, 255, 255, 0.15)',
         }} />
-        <View style={[styles.stickKnob, dynamicStyles.knob]}>
-          <Text style={[styles.stickLabel, { fontSize: 10 }]}>{label}</Text>
-        </View>
+        <View style={[styles.stickKnob, dynamicStyles.knob]} />
       </View>
     </View>
   );
@@ -393,9 +391,9 @@ export const DigitalButton = memo(function DigitalButton({
 }: DigitalButtonProps) {
   const dynamicStyle = useMemo(
     () => ({
-      width: wide ? size * 1.65 : size,
+      width: wide ? size * 2.4 : size,
       height: size,
-      borderRadius: wide ? 10 : size / 2,
+      borderRadius: wide ? 12 : size / 2,
     }),
     [size, wide]
   );
@@ -506,6 +504,7 @@ export const DigitalButton = memo(function DigitalButton({
         style={[
           styles.buttonText,
           variant === "actionY" && styles.darkButtonText,
+          label.length > 2 && { fontSize: 10, fontWeight: "800", letterSpacing: 0.8 },
         ]}
       >
         {label}
@@ -752,8 +751,10 @@ const styles = StyleSheet.create({
     minWidth: 44,
   },
   buttonActive: {
-    opacity: 0.72,
+    opacity: 0.82,
     transform: [{ scale: 0.96 }],
+    backgroundColor: "rgba(255, 255, 255, 0.18)",
+    borderColor: "rgba(255, 255, 255, 0.32)",
   },
   buttonText: {
     color: "#ffffff",
@@ -779,7 +780,9 @@ const styles = StyleSheet.create({
     backgroundColor: "#3a3a5c",
   },
   center: {
-    backgroundColor: "rgba(255,255,255,0.09)",
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    borderWidth: 1,
   },
   dpad: {
     height: 132,
