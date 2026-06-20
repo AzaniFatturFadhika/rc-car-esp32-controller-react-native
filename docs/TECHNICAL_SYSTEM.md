@@ -25,7 +25,7 @@ Sistem dirancang dengan model **Dual-Channel Redundancy** dan pemisahan tugas (*
 │  - React Native (Expo SDK v56)  │   WebSocket   │  ┌─────────┐      ┌──────────┐      │
 │  - Multi-touch Gestures         │               │  │  Core 1 │      │  Core 0  │      │
 │  - Throttled Transmission       │      BLE      │  │ Network │─────►│ PID Loop │      │
-│  - Real-time Telemetry Display  │◄─────────────►│  │  (Rx)   │Queue │ (Motor)  │      │
+│                                 │◄─────────────►│  │  (Rx)   │Queue │ (Motor)  │      │
 │                                 │  Nordic UART  │  └─────────┘      └──────────┘      │
 └─────────────────────────────────┘               └─────────────────────────────────────┘
 ```
@@ -46,7 +46,7 @@ Aplikasi dibangun menggunakan **React Native** dengan **Expo SDK v56** dan diopt
 * **Instant Stop (Rem Instan)**: Ketika pengguna melepaskan slider dan kembali ke posisi tengah (`0`), pembatasan 30ms langsung dilewati (**bypassed**). Perintah stop (`0`) dikirimkan seketika demi faktor keselamatan respons mekanis robot.
 
 ### B. Arsitektur State & Connection Manager
-* **Zustand Store (`connectionStore.ts`)**: Menyimpan status koneksi, jenis protokol aktif, autentikasi, serta nilai telemetri dari robot.
+* **Zustand Store (`connectionStore.ts`)**: Menyimpan status koneksi, jenis protokol aktif, serta autentikasi dari robot.
 * **Connection Manager (`ConnectionManager.ts`)**:
   * **Koneksi Wi-Fi**: Menggunakan WebSocket klien standar pada port `81`.
   * **Koneksi BLE**: Menggunakan library `react-native-ble-plx` untuk berinteraksi dengan Nordic UART Service (NUS) pada ESP32.
@@ -66,9 +66,9 @@ Tugas ini memiliki prioritas tertinggi (Priority 5) untuk menjamin stabilitas pe
 * **Auto-Polarity Correction**: Jika mendeteksi bahwa arah putaran roda (umpan balik enkoder) berlawanan dengan arah perintah gerak (akibat salah kabel/terbalik), firmware secara otomatis membalik polaritas enkoder setelah **250ms** untuk menghindari malfungsi PID runaway.
 * **Failsafe Enkoder**: Jika motor diperintahkan bergerak namun pembacaan enkoder bernilai `0` selama **500ms** berturut-turut (misalnya karena roda macet atau kabel enkoder copot saat berjalan), sistem menurunkan kendali ke mode Open-Loop guna mencegah lonjakan integrasi PID (*windup*).
 
-### B. Core 1: Network & Telemetry Task
+### B. Core 1: Network & Connection Watchdog Task
 Tugas ini berjalan pada prioritas lebih rendah (Priority 2) di Core 1 untuk memproses komunikasi data:
-* **Broadcast Telemetri**: Mengirimkan data telemetri real-time berisi kecepatan motor kiri dan kanan setiap **100ms** ke semua klien aktif (melalui WebSocket dan notifikasi karakteristik TX BLE).
+* **Connection Watchdog**: Memantau waktu aktivitas masuk dari heartbeat keep-alive klien dan memutus koneksi serta mereset motor jika terjadi kegagalan/timeout.
 * **NimBLE-Arduino Integration**: Menggunakan pustaka NimBLE yang dioptimalkan untuk meminimalkan penggunaan RAM dan meningkatkan throughput BLE.
 
 ---
@@ -83,10 +83,7 @@ Mengirimkan data dalam format string JSON tekstual. Sangat fleksibel untuk penge
   ```json
   {"type": "CMD", "lx": 0, "ly": 80, "rx": 0, "ry": 0, "dpad": ""}
   ```
-* **Payload Telemetri (ESP32 → App)**:
-  ```json
-  {"type": "TELEMETRY", "speedL": 120.5, "speedR": -95.2}
-  ```
+
 
 ### B. Protokol Biner (Kinerja Maksimal)
 Menggunakan struktur byte padat untuk meminimalkan bandwidth transmisi BLE (sangat penting untuk kestabilan BLE tanpa fragmentasi).
@@ -98,10 +95,7 @@ Menggunakan struktur byte padat untuk meminimalkan bandwidth transmisi BLE (sang
   * `LX`, `LY`, `rx`, `ry`: Nilai sumbu stick/slider (-100 s/d 100, bertipe data signed byte `int8_t`).
   * `DPAD`: Representasi tombol DPAD (uint8_t).
   * `CHECKSUM`: Hasil operasi XOR antara byte 1 s/d byte 5.
-* **Payload Telemetri (ESP32 → App)**:
-  ```json
-  {"type": "TEL", "l": 120.5, "r": -95.2}
-  ```
+
 
 ---
 
@@ -114,15 +108,7 @@ Untuk mengantisipasi fragmentasi paket akibat pembatasan MTU BLE default (20 byt
 3. Jika bukan paket biner, data dianggap string JSON. Setiap karakter dimasukkan ke dalam `bleRxBuf` hingga mendeteksi karakter penutup `}`.
 4. Setelah paket JSON utuh terkonstruksi, barulah `deserializeJson` dipanggil untuk parsing data. Hal ini mencegah kegagalan otentikasi koneksi akibat fragmentasi paket.
 
-### B. Sinkronisasi Thread Telemetri (FreeRTOS Mutex)
-Variabel global `telemetry` dibagikan di antara Core 0 (penulis data) dan Core 1 (pengirim data). Guna menghindari pembaruan parsial (*data race* pada nilai float 32-bit), akses ke struct telemetri dilindungi oleh FreeRTOS Mutex (`telMutex`):
-```cpp
-if (xSemaphoreTake(telMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-    telemetry.speedL = actL;
-    telemetry.speedR = actR;
-    xSemaphoreGive(telMutex);
-}
-```
+
 
 ---
 

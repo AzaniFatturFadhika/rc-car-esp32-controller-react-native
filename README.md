@@ -9,7 +9,7 @@ Repositori ini berisi kode lengkap untuk sistem kontrol robot / mobil RC berbasi
 1. **Dual-Channel Connectivity**: Koneksi nirkabel fleksibel menggunakan **Wi-Fi (WebSocket)** untuk bandwidth tinggi, atau **BLE (Bluetooth Low Energy)** untuk konsumsi daya rendah dan latensi minimal.
 2. **Dual-Core FreeRTOS Firmware**:
    * **Core 0**: Real-time closed-loop PID motor controller yang berjalan ketat pada frekuensi 50Hz (jeda 20ms).
-   * **Core 1**: Penanganan jaringan, negosiasi keamanan, dan pengiriman telemetri secara asinkron.
+   * **Core 1**: Penanganan jaringan, negosiasi keamanan, dan penanganan watchdog koneksi secara asinkron.
 3. **Smart Bootstrapping & Fallback**: Robot dapat berjalan lancar menggunakan kendali **Open-Loop PWM** jika enkoder roda tidak terpasang/tidak terdeteksi, dan otomatis beralih ke **Closed-Loop PID** setelah putaran roda pertama terdeteksi.
 4. **Auto-Polarity Correction**: Secara otomatis mendeteksi arah putaran enkoder yang terbalik (mismatch arah roda vs perintah), dan membalik pembacaan polaritas umpan balik secara cerdas setelah 250ms untuk menghindari PID runaway.
 5. **BLE Rx Buffering**: Mencegah kegagalan otentikasi/koneksi akibat fragmentasi paket data BLE pada batasan standar MTU 20-byte.
