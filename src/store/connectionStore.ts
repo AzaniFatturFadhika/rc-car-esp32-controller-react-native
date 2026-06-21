@@ -32,7 +32,7 @@ export const useConnectionStore = create<ConnectionStoreState>((set, get) => ({
   connectWiFi: async (host, port) => {
     set({ errorMessage: null });
     try {
-      await connectionManager.connectWiFi(host, port);
+      await connectionManager.connectUDP(host, port);
     } catch (error: any) {
       console.warn('WiFi connect error handled in store:', error.message);
     }

@@ -53,7 +53,7 @@ export const EMPTY_GAMEPAD_STATE: GamepadState = {
 export const DEFAULT_CONNECTION_SETTINGS: ConnectionSettings = {
   mode: 'wifi',
   host: '192.168.4.1',
-  port: 81,
+  port: 12345,
   deviceId: '',
   deviceName: 'ESP32-Gamepad',
 };

@@ -233,7 +233,7 @@ export const SettingsSheet = memo(function SettingsSheet({
                 onPress={() => setMode("wifi")}
               >
                 <Text style={[styles.modeTabText, mode === "wifi" && styles.modeTabTextActive]}>
-                  Wi-Fi WebSocket
+                  Wi-Fi UDP
                 </Text>
               </Pressable>
               <Pressable
@@ -393,7 +393,7 @@ export const SettingsSheet = memo(function SettingsSheet({
 
             <Text style={styles.hint}>
               {mode === "wifi"
-                ? "The ESP32 must run a WebSocket server on the configured port. Default: 192.168.4.1:81"
+                ? "The ESP32 must listen for UDP packets on the configured port. Default: 192.168.4.1:12345"
                 : "Ensure Bluetooth is enabled. For real-world use, your ESP32 must run a BLE UART service."}
             </Text>
           </ScrollView>
