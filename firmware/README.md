@@ -25,7 +25,10 @@ Berikut adalah panduan koneksi fisik (wiring) dari ESP32 ke Driver Motor L298N d
 
 ---
 
-### 2. Koneksi Sensor Enkoder Motor DC (6-Pin Connector)
+### 2. (Opsional) Koneksi Sensor Enkoder Motor DC (6-Pin Connector)
+
+> Jika Anda menggunakan firmware PWM-only atau UDP, enkoder **tidak diperlukan**. Pin enkoder pada ESP32 bisa dibiarkan kosong.
+> Bagian ini hanya relevan untuk firmware `arduinon-robot-esp32-binary` yang menggunakan closed-loop PID.
 
 Biasanya, motor DC dengan enkoder (seperti tipe JGB37 atau motor kuning DC gear) menggunakan konektor 6-pin. Berikut adalah konfigurasi penyambungannya:
 
@@ -47,7 +50,7 @@ Biasanya, motor DC dengan enkoder (seperti tipe JGB37 atau motor kuning DC gear)
 | **`C1 / Encoder A`**| **GPIO 21** (ESP32) | Sinyal Enkoder Kanan A (`ENC_R_A`) |
 | **`C2 / Encoder B`**| **GPIO 22** (ESP32) | Sinyal Enkoder Kanan B (`ENC_R_B`) |
 | **`VCC (Encoder)`** | **3.3V** (ESP32) | Daya Sensor (Sangat disarankan **3.3V** agar sinyal aman untuk GPIO ESP32) |
-| **`M2 / Motor -`** | **OUT4** (L298N) | Daya Motor Kanan |
+| **`M2 / Motor -`** | **OUT2** (L298N) | Daya Motor Kanan |
 
 ---
 
@@ -55,9 +58,14 @@ Biasanya, motor DC dengan enkoder (seperti tipe JGB37 atau motor kuning DC gear)
 
 Sebelum melakukan kompilasi di Arduino IDE, pastikan pustaka-pustaka berikut sudah terinstal melalui **Library Manager** (Ctrl + Shift + I):
 
+### Untuk semua varian firmware:
 1. **`ArduinoJson`** (oleh Benoît Blanchon) — disarankan versi **v7.x** (atau v6.x).
 2. **`NimBLE-Arduino`** (oleh h2zero) — versi **v2.x** (untuk optimasi memori dan kestabilan BLE).
+
+### Untuk firmware berbasis WebSocket (`arduinon-robot-esp32-binary`):
 3. **`WebSockets`** (oleh Links2004) — untuk penanganan koneksi WebSocket Wi-Fi.
+
+> **Catatan:** Firmware **UDP** (`arduino-robot-esp32-udp`) dan **PWM-only** (`arduino-robot-esp32-pwm-only`) **tidak memerlukan** library `WebSockets`. Mereka menggunakan `WiFiUdp` (built-in ESP32) untuk komunikasi UDP.
 
 ---
 
@@ -73,7 +81,11 @@ Untuk performa dan jangkauan sinyal maksimal, gunakan konfigurasi board berikut 
 
 ## 🚀 Langkah Unggah (Upload)
 1. Sambungkan ESP32 ke komputer menggunakan kabel USB data berkualitas tinggi.
-2. Buka berkas firmware utama: `firmware/arduinon-robot-esp32-binary/arduinon-robot-esp32-binary.ino`.
-3. Pilih port COM yang sesuai di Arduino IDE.
-4. Klik tombol **Upload** (panah kanan).
-5. Buka **Serial Monitor** dengan Baud Rate **`115200`** untuk melihat proses booting, pencetakan alamat MAC BLE, dan status aktivitas koneksi.
+2. Pilih varian firmware yang sesuai dengan kebutuhan Anda:
+   * **`firmware/arduinon-robot-esp32-binary/`** — Firmware lengkap dengan PID + encoder + WebSocket (kompatibel dengan app versi lama).
+   * **`firmware/arduino-robot-esp32-pwm-only/`** — Firmware PWM-only tanpa encoder, komunikasi **WebSocket**.
+   * **`firmware/arduino-robot-esp32-udp/`** — Firmware PWM-only tanpa encoder, komunikasi **UDP** (direkomendasikan untuk latensi terendah).
+3. Buka berkas `.ino` yang sesuai di Arduino IDE.
+4. Pilih port COM yang sesuai.
+5. Klik tombol **Upload** (panah kanan).
+6. Buka **Serial Monitor** dengan Baud Rate **`115200`** untuk melihat proses booting, pencetakan alamat MAC BLE, dan status aktivitas koneksi.
