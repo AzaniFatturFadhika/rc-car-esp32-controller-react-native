@@ -6,12 +6,12 @@ Repositori ini berisi kode lengkap untuk sistem kontrol robot / mobil RC berbasi
 
 ## 📡 Fitur & Keunggulan Sistem
 
-1. **Dual-Channel Connectivity**: Koneksi nirkabel fleksibel menggunakan **Wi-Fi (WebSocket)** untuk bandwidth tinggi, atau **BLE (Bluetooth Low Energy)** untuk konsumsi daya rendah dan latensi minimal.
+1. **Dual-Channel Connectivity**: Koneksi nirkabel fleksibel menggunakan **Wi-Fi (UDP)** untuk bandwidth tinggi dan latensi minimal, atau **BLE (Bluetooth Low Energy)** untuk konsumsi daya rendah tanpa perlu router.
 2. **Dual-Core FreeRTOS Firmware**:
-   * **Core 0**: Real-time closed-loop PID motor controller yang berjalan ketat pada frekuensi 50Hz (jeda 20ms).
-   * **Core 1**: Penanganan jaringan, negosiasi keamanan, dan penanganan watchdog koneksi secara asinkron.
-3. **Smart Bootstrapping & Fallback**: Robot dapat berjalan lancar menggunakan kendali **Open-Loop PWM** jika enkoder roda tidak terpasang/tidak terdeteksi, dan otomatis beralih ke **Closed-Loop PID** setelah putaran roda pertama terdeteksi.
-4. **Auto-Polarity Correction**: Secara otomatis mendeteksi arah putaran enkoder yang terbalik (mismatch arah roda vs perintah), dan membalik pembacaan polaritas umpan balik secara cerdas setelah 250ms untuk menghindari PID runaway.
+   * **Core 0**: Real-time open-loop PWM motor controller pada frekuensi 50Hz (jeda 20ms) dengan smoothing dan exponential curve.
+   * **Core 1**: Penanganan jaringan (UDP + BLE), autentikasi, dan watchdog koneksi secara asinkron.
+3. **Dual Protocol WiFi**: Mendukung **UDP** (latensi terendah, direkomendasikan) dan **WebSocket** (legacy). Pilih varian firmware sesuai kebutuhan.
+4. **Binary Command Protocol**: Paket perintah 7-byte dengan header, sumbu joystick, dan checksum untuk efisiensi bandwidth maksimal.
 5. **BLE Rx Buffering**: Mencegah kegagalan otentikasi/koneksi akibat fragmentasi paket data BLE pada batasan standar MTU 20-byte.
 6. **Throttled Input dengan Rem Instan**: Transmisi input dibatasi pada jeda 30ms untuk mencegah penumpukan data pada antrean ponsel, namun perintah stop (`0`) dikirimkan secara instan demi keamanan pengereman robot.
 
@@ -21,8 +21,10 @@ Repositori ini berisi kode lengkap untuk sistem kontrol robot / mobil RC berbasi
 
 * **`src/`**: Kode sumber aplikasi mobile React Native (Expo Router v3).
 * **`firmware/`**: Berkas firmware ESP32 untuk diunggah menggunakan Arduino IDE.
-  * **`arduinon-robot-esp32-binary/`**: Firmware biner berkinerja tinggi (Sangat Disarankan).
-  * **`arduino-robot-esp32-binary-max-performance-and-range/`**: Firmware alternatif dengan optimasi performa ekstra.
+  * **`arduino-robot-esp32-udp/`** **(Direkomendasikan)**: Firmware PWM-only + UDP + BLE, tanpa encoder, latensi terendah.
+  * **`arduino-robot-esp32-pwm-only/`**: Firmware PWM-only + WebSocket + BLE, tanpa encoder.
+  * **`arduinon-robot-esp32-binary/`**: Firmware lengkap dengan PID + encoder + WebSocket + BLE.
+  * **`arduino-robot-esp32-binary-max-performance-and-range/`**: Firmware alternatif PID + encoder dengan optimasi performa ekstra.
 * **`docs/`**: Panduan teknis arsitektur sistem, skema data, dan panduan build APK lokal.
 
 ---
@@ -35,9 +37,8 @@ Repositori ini berisi kode lengkap untuk sistem kontrol robot / mobil RC berbasi
 3. Install library berikut melalui Library Manager:
    * **`ArduinoJson`** (oleh Benoît Blanchon)
    * **`NimBLE-Arduino`** (oleh h2zero) - untuk optimasi memori BLE v2.x.
-   * **`WebSockets`** (oleh Links2004) - untuk koneksi WebSocket.
-4. Buka berkas [arduinon-robot-esp32-binary.ino](firmware/arduinon-robot-esp32-binary/arduinon-robot-esp32-binary.ino) di Arduino IDE.
-5. Sesuaikan pin motor dan enkoder kuadratur di bagian konfigurasi pin jika diperlukan.
+4. Buka berkas [arduino-robot-esp32-udp.ino](firmware/arduino-robot-esp32-udp/arduino-robot-esp32-udp.ino) di Arduino IDE (direkomendasikan) atau pilih varian firmware lain sesuai kebutuhan (lihat [firmware/README.md](firmware/README.md)).
+5. Sesuaikan pin motor di bagian konfigurasi pin jika diperlukan.
 6. Unggah kode ke papan ESP32 Anda.
 
 ### 2. Jalankan Aplikasi Mobile (Lokal)
@@ -56,10 +57,10 @@ Repositori ini berisi kode lengkap untuk sistem kontrol robot / mobil RC berbasi
 
 ## ⚙️ Cara Menghubungkan Gamepad ke Robot
 
-### A. Melalui Wi-Fi (WebSocket)
+### A. Melalui Wi-Fi (UDP)
 1. Hubungkan Wi-Fi ponsel Anda ke Access Point robot (Default SSID: **`ESP32-RC-Car`**, Password: **`12345678`**).
 2. Buka aplikasi di ponsel.
-3. Tekan tombol **SETTINGS** di tengah layar, pastikan Host adalah `192.168.4.1` dan Port `81`.
+3. Tekan tombol **SETTINGS** di tengah layar, pastikan Host adalah `192.168.4.1` dan Port `12345`.
 4. Tekan **WiFi Connect**. Status akan berubah menjadi **🟢 Connected**.
 
 ### B. Melalui Bluetooth (BLE)
@@ -71,11 +72,15 @@ Repositori ini berisi kode lengkap untuk sistem kontrol robot / mobil RC berbasi
 ---
 
 ## 🛡️ Fitur Failsafe Utama
-* **Watchdog Timeout (500ms)**: Jika koneksi ponsel terputus mendadak atau aplikasi mengalami crash, robot secara otomatis mematikan semua motor dalam waktu 500ms demi menghindari tabrakan.
-* **Watchdog Enkoder (500ms)**: Jika motor diperintahkan bergerak namun pembacaan enkoder fisik macet di angka `0` selama 500ms (misal karena roda tersangkut), firmware akan menurunkan mode PID ke PWM biasa untuk mencegah kerusakan komponen.
+* **Watchdog Koneksi (500ms)**: Jika ESP32 tidak menerima paket perintah dari ponsel selama 500ms, motor langsung dimatikan demi keamanan.
+* **Heartbeat Timeout (2 detik)**: Jika tidak ada paket sama sekali selama 2 detik, client UDP di-deauthorize — harus autentikasi ulang untuk mengontrol robot.
+* **Auto-Stop on BLE Disconnect**: Koneksi BLE yang terputus langsung menghentikan motor.
 
 ---
 
 ## 🛠️ Informasi Detail
-Untuk rincian arsitektur sistem, format data biner, alur data FreeRTOS, dan parameter PID, silakan baca berkas panduan teknis mendalam di:
+Untuk rincian arsitektur sistem, format data biner, dan alur data FreeRTOS, silakan baca berkas panduan teknis mendalam di:
 👉 **[TECHNICAL_SYSTEM.md](docs/TECHNICAL_SYSTEM.md)**
+
+Panduan pinout, wiring, dan pemilihan varian firmware:
+👉 **[firmware/README.md](firmware/README.md)**

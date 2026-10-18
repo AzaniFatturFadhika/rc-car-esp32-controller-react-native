@@ -67,7 +67,7 @@ export const ConnectionStatusBar = memo(function ConnectionStatusBar({
 
   const renderTargetInfo = () => {
     if (settings.mode === "wifi") {
-      return `ws://${settings.host}:${settings.port}`;
+      return `udp://${settings.host}:${settings.port}`;
     }
     return `BLE: ${settings.deviceName || "ESP32"}`;
   };

@@ -22,17 +22,17 @@ Sistem dirancang dengan model **Dual-Channel Redundancy** dan pemisahan tugas (*
 ┌─────────────────────────────────┐               ┌─────────────────────────────────────┐
 │                                 │   Wi-Fi AP    │              ESP32                  │
 │       GAMEPAD CONTROLLER        │◄─────────────►│                                     │
-│  - React Native (Expo SDK v56)  │   WebSocket   │  ┌─────────┐      ┌──────────┐      │
+│  - React Native (Expo SDK v56)  │   UDP (raw)   │  ┌─────────┐      ┌──────────┐      │
 │  - Multi-touch Gestures         │               │  │  Core 1 │      │  Core 0  │      │
-│  - Throttled Transmission       │      BLE      │  │ Network │─────►│ PID Loop │      │
-│                                 │◄─────────────►│  │  (Rx)   │Queue │ (Motor)  │      │
+│  - Throttled Transmission       │      BLE      │  │Network  │─────►│ Motor    │      │
+│                                 │◄─────────────►│  │  (Rx)   │Queue │ (PWM)    │      │
 │                                 │  Nordic UART  │  └─────────┘      └──────────┘      │
 └─────────────────────────────────┘               └─────────────────────────────────────┘
 ```
 
 * **Gamepad Controller** mengumpulkan input sentuhan pengguna secara real-time, memprosesnya melalui filter kinematis, dan mengirimkannya ke ESP32 secara periodik.
-* **Core 1 ESP32** bertanggung jawab atas konektivitas jaringan (Wi-Fi WebSocket & BLE), menerima payload perintah, merekonstruksi fragmen data, dan mengidentifikasi jenis protokol.
-* **Core 0 ESP32** berjalan secara independen untuk melakukan kendali real-time closed-loop PID pada motor DC menggunakan sensor enkoder fisik dengan periodisasi ketat 50Hz (20ms).
+* **Core 1 ESP32** bertanggung jawab atas konektivitas jaringan (Wi-Fi UDP & BLE), menerima payload perintah melalui UDP polling, merekonstruksi fragmen data BLE, dan mengidentifikasi jenis protokol.
+* **Core 0 ESP32** berjalan secara independen untuk melakukan kendali real-time open-loop PWM pada motor DC dengan periodisasi ketat 50Hz (20ms).
 
 ---
 
@@ -48,7 +48,7 @@ Aplikasi dibangun menggunakan **React Native** dengan **Expo SDK v56** dan diopt
 ### B. Arsitektur State & Connection Manager
 * **Zustand Store (`connectionStore.ts`)**: Menyimpan status koneksi, jenis protokol aktif, serta autentikasi dari robot.
 * **Connection Manager (`ConnectionManager.ts`)**:
-  * **Koneksi Wi-Fi**: Menggunakan WebSocket klien standar pada port `81`.
+  * **Koneksi Wi-Fi (UDP)**: Membuat UDP socket via library `react-native-udp`, bind ke port acak, dan berkomunikasi dengan ESP32 pada port `12345`. Mengirim paket AUTH JSON untuk autentikasi, lalu mengirim command biner 7-byte.
   * **Koneksi BLE**: Menggunakan library `react-native-ble-plx` untuk berinteraksi dengan Nordic UART Service (NUS) pada ESP32.
   * **Auto-MTU (Android)**: Meminta MTU berukuran 512 byte segera setelah tersambung pada perangkat Android untuk meminimalisasi fragmentasi paket.
   * **High Connection Priority**: Mengatur prioritas koneksi BLE ke tingkat tinggi (High Priority) guna mendapatkan interval koneksi tercepat (11.25ms).
@@ -59,16 +59,18 @@ Aplikasi dibangun menggunakan **React Native** dengan **Expo SDK v56** dan diopt
 
 Firmware diimplementasikan dalam bahasa C++ menggunakan FreeRTOS untuk membagi beban tugas secara asinkron.
 
-### A. Core 0: Real-time PID Task (50Hz)
-Tugas ini memiliki prioritas tertinggi (Priority 5) untuk menjamin stabilitas perhitungan integral dan diferensial motor:
-* **Pembacaan Enkoder (PCNT)**: Menggunakan driver perangkat keras Pulse Counter (PCNT) bawaan ESP32 untuk membaca enkoder kuadratur pada pin GPIO 18/19 (kiri) dan 21/22 (kanan).
-* **Bootstrapping Open-Loop**: Pada awal start, kendali motor berjalan pada mode **Open-Loop** (PWM langsung). Begitu pulsa enkoder pertama kali terdeteksi, sistem secara otomatis mengaktifkan mode **Closed-Loop PID**. Hal ini membuat robot tanpa enkoder tetap dapat berjalan dengan lancar.
-* **Auto-Polarity Correction**: Jika mendeteksi bahwa arah putaran roda (umpan balik enkoder) berlawanan dengan arah perintah gerak (akibat salah kabel/terbalik), firmware secara otomatis membalik polaritas enkoder setelah **250ms** untuk menghindari malfungsi PID runaway.
-* **Failsafe Enkoder**: Jika motor diperintahkan bergerak namun pembacaan enkoder bernilai `0` selama **500ms** berturut-turut (misalnya karena roda macet atau kabel enkoder copot saat berjalan), sistem menurunkan kendali ke mode Open-Loop guna mencegah lonjakan integrasi PID (*windup*).
+### A. Core 0: Motor PWM Task (50Hz)
+Tugas ini memiliki prioritas tertinggi (Priority 5) untuk menjamin stabilitas output motor:
+* **Kinematika & Smoothing**: Menghitung nilai motor kiri/kanan dari input joystick menggunakan mixing tank-drive, menerapkan deadzone, exponential curve (expo), dan exponential moving average (EMA) smoothing.
+* **Open-Loop PWM Murni**: Setiap nilai motor (-100..100) langsung dikonversi ke duty cycle PWM (0..255) melalui `raw * 2.55f`. Tidak ada encoder feedback — kontrol kecepatan sepenuhnya melalui tegangan PWM.
+* **Watchdog Koneksi (500ms)**: Jika tidak ada perintah baru dari antrean selama 500ms, motor segera dimatikan (`setMotors(0, 0)`) demi keselamatan.
+* **Task Periodik**: Loop kontrol berjalan ketat pada interval 20ms (50Hz) via `vTaskDelayUntil`.
 
 ### B. Core 1: Network & Connection Watchdog Task
 Tugas ini berjalan pada prioritas lebih rendah (Priority 2) di Core 1 untuk memproses komunikasi data:
-* **Connection Watchdog**: Memantau waktu aktivitas masuk dari heartbeat keep-alive klien dan memutus koneksi serta mereset motor jika terjadi kegagalan/timeout.
+* **UDP Polling**: Paket UDP masuk diproses di `loop()` setiap 1ms. Paket dari client terautentikasi diteruskan ke motor queue; paket AUTH dari client baru divalidasi dan disimpan IP:port-nya.
+* **Connection Watchdog**: Memantau waktu aktivitas masuk dari heartbeat keep-alive klien. Jika tidak ada paket selama **HB_TIMEOUT (2 detik)**, client di-deauthorize dan koneksi BLE diputus.
+* **Dual-Radio**: ESP32 menerima perintah secara bersamaan melalui **UDP** (port 12345) dan **BLE** (Nordic UART Service). Protokol auto-detect berfungsi untuk kedua saluran.
 * **NimBLE-Arduino Integration**: Menggunakan pustaka NimBLE yang dioptimalkan untuk meminimalkan penggunaan RAM dan meningkatkan throughput BLE.
 
 ---
@@ -116,6 +118,6 @@ Untuk mengantisipasi fragmentasi paket akibat pembatasan MTU BLE default (20 byt
 
 Sistem kontrol ini dirancang dengan tingkat keamanan berlapis guna mencegah kerusakan mekanis atau robot berjalan tanpa kendali:
 
-1. **Watchdog Konektivitas (500ms)**: Jika ESP32 tidak menerima paket perintah baru dari aplikasi ponsel selama **500ms**, loop kontrol motor secara otomatis mematikan PWM (`setMotors(0, 0)`) dan mereset status integrator PID.
-2. **Auto-Stop on Disconnect**: Begitu event pemutusan koneksi terdeteksi pada tingkat driver (baik WebSocket ditutup atau BLE putus), perintah stop secara instan ditulis ke antrean perintah motor tanpa menunggu timeout watchdog habis.
+1. **Watchdog Konektivitas (500ms)**: Jika ESP32 tidak menerima paket perintah baru dari aplikasi ponsel selama **500ms**, loop kontrol motor secara otomatis mematikan PWM (`setMotors(0, 0)`).
+2. **De-auth on Timeout**: Jika tidak ada paket dari client UDP selama **HB_TIMEOUT (2 detik)**, client di-deauthorize. Client harus mengirim AUTH ulang untuk kontrol lagi. Koneksi BLE yang terputus juga memicu de-auth.
 3. **Heartbeat Keep-Alive**: Aplikasi mengirimkan paket heartbeat (`{"type":"HB"}`) secara periodik setiap 1 detik selama kondisi idle untuk memberi tahu robot bahwa aplikasi masih aktif dan terkoneksi.

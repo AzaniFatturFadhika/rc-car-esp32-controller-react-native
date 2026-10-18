@@ -17,11 +17,15 @@ export type IncomingMessage =
 export const CONFIG = {
   AUTH_TOKEN: 'secret123', // Harus sama dengan firmware
   HEARTBEAT_INTERVAL: 1000, // 1 detik
-  
+  UDP_PORT: 12345,
+
   // BLE UUIDs (Nordic UART Service)
   BLE_SERVICE_UUID: '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
   BLE_RX_UUID: '6e400002-b5a3-f393-e0a9-e50e24dcca9e',
   BLE_TX_UUID: '6e400003-b5a3-f393-e0a9-e50e24dcca9e',
+
+  UDP_AUTH_TIMEOUT: 3000,
+  UDP_RECONNECT_DELAYS: [500, 1000, 2000],
 };
 
 // Helper untuk membuat pesan

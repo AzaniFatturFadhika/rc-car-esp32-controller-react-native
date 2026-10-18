@@ -1,6 +1,7 @@
+import { createSocket } from 'react-native-udp';
 import { BleManager, Device } from 'react-native-ble-plx';
 import { Platform, PermissionsAndroid } from 'react-native';
-import { CONFIG, createAuthMessage, createHeartbeatMessage, createBinaryHeartbeatMessage } from './protocol';
+import { CONFIG, createAuthMessage, createHeartbeatMessage } from './protocol';
 import { Buffer } from 'buffer';
 
 export async function requestBluetoothPermissions(): Promise<boolean> {
@@ -73,31 +74,30 @@ export type ConnectionStatus =
   | 'error';
 
 export class ConnectionManager {
-  private ws: WebSocket | null = null;
+  private udpSocket: any = null;
   private bleManager: BleManager | null = null;
   private bleDevice: Device | null = null;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private rssiInterval: ReturnType<typeof setInterval> | null = null;
+  private authTimeout: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private rxBuffer: string = '';
-  
 
-  
   public connectionType: ConnectionType = 'none';
   public connectionStatus: ConnectionStatus = 'disconnected';
   public isAuthenticated: boolean = false;
   public isBleSupported: boolean = false;
   public isSimulatedBLE: boolean = false;
   public isBinaryProtocol: boolean = false;
-  
+
   private currentHost: string = '';
-  private currentPort: number = 81;
+  private currentPort: number = CONFIG.UDP_PORT;
+
   private currentDeviceId: string = '';
   private currentDeviceName: string = '';
-  
+
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 3;
-  private reconnectDelays = [250, 600, 1100];
   private missedHeartbeats: number = 0;
   private maxMissedHeartbeats: number = 3;
 
@@ -117,8 +117,8 @@ export class ConnectionManager {
     }
   }
 
-  // ==================== WIFI CONNECTION ====================
-  async connectWiFi(host: string, port: number, attempt = 0): Promise<void> {
+  // ==================== UDP CONNECTION ====================
+  async connectUDP(host: string, port: number = CONFIG.UDP_PORT, attempt = 0): Promise<void> {
     this.disconnect();
     this.currentHost = host;
     this.currentPort = port;
@@ -127,81 +127,56 @@ export class ConnectionManager {
     this.onStatusChange?.(this.connectionStatus, this.connectionType);
     this.onRssiChange?.(null);
 
+    console.log(`Connecting UDP to ${host}:${port}`);
+
+    const socket = createSocket('udp4');
+    this.udpSocket = socket;
+
     return new Promise((resolve, reject) => {
-      const url = host.startsWith('ws://') || host.startsWith('wss://') 
-        ? host 
-        : `ws://${host}:${port}`;
-      
-      console.log(`Connecting WebSocket to: ${url}`);
-      
-      let connectionTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-        if (this.connectionStatus === 'connecting' || this.connectionStatus === 'reconnecting') {
-          console.log('WebSocket connection timeout reached');
-          if (this.ws) {
-            this.ws.onopen = null;
-            this.ws.onclose = null;
-            this.ws.onerror = null;
-            this.ws.onmessage = null;
-            this.ws.close();
-            this.ws = null;
-          }
-          if (attempt === 0) {
-            this.onError?.(`Connection timeout to ${host}:${port}`);
-          }
-          this.handleDisconnectOrFailure(reject);
+      const onMessage = (data: Buffer, rinfo: { address: string; port: number }) => {
+        const text = data.toString('utf-8');
+        console.log(`UDP recv from ${rinfo.address}:${rinfo.port}: ${text}`);
+        this.handleIncomingMessage(text);
+      };
+
+      const onError = (err: Error) => {
+        console.error('UDP socket error:', err);
+        if (attempt === 0) {
+          this.onError?.(`UDP error: ${err.message}`);
         }
-      }, 5000); // 5 seconds connection timeout
+      };
 
-      try {
-        this.ws = new WebSocket(url);
+      socket.on('message', onMessage);
+      socket.on('error', onError);
 
-        this.ws.onopen = () => {
-          if (connectionTimeout) {
-            clearTimeout(connectionTimeout);
-            connectionTimeout = null;
+      socket.bind(0, () => {
+        console.log(`UDP socket bound, sending AUTH to ${host}:${port}`);
+        this.connectionStatus = 'authenticating';
+        this.onStatusChange?.(this.connectionStatus, this.connectionType);
+
+        // Send AUTH message
+        const authMsg = JSON.stringify(createAuthMessage());
+        const buf = Buffer.from(authMsg);
+        socket.send(buf, 0, buf.length, port, host, (err?: Error) => {
+          if (err) {
+            console.error('UDP AUTH send error:', err);
+            this.handleDisconnectOrFailure(reject);
+            return;
           }
-          console.log('WebSocket connected, authenticating...');
-          this.reconnectAttempts = 0;
-          this.missedHeartbeats = 0;
-          this.connectionStatus = 'authenticating';
-          this.onStatusChange?.(this.connectionStatus, this.connectionType);
-          
-          // Send AUTH token
-          this.sendMessage(createAuthMessage());
           resolve();
-        };
+        });
 
-        this.ws.onmessage = (event) => {
-          this.handleIncomingMessage(event.data);
-        };
-
-        this.ws.onerror = (error) => {
-          if (connectionTimeout) {
-            clearTimeout(connectionTimeout);
-            connectionTimeout = null;
+        // Auth timeout
+        this.authTimeout = setTimeout(() => {
+          if (this.connectionStatus === 'authenticating' || this.connectionStatus === 'connecting') {
+            console.log('UDP auth timeout reached');
+            if (attempt === 0) {
+              this.onError?.(`Auth timeout connecting to ${host}:${port}`);
+            }
+            this.handleDisconnectOrFailure(reject);
           }
-          console.log('WebSocket error:', error);
-          if (attempt === 0) {
-            this.onError?.(`Could not reach ${host}:${port}`);
-          }
-        };
-
-        this.ws.onclose = (event) => {
-          if (connectionTimeout) {
-            clearTimeout(connectionTimeout);
-            connectionTimeout = null;
-          }
-          console.log(`WebSocket closed: code=${event.code}, reason=${event.reason}`);
-          this.handleDisconnectOrFailure(reject);
-        };
-      } catch (error) {
-        if (connectionTimeout) {
-          clearTimeout(connectionTimeout);
-          connectionTimeout = null;
-        }
-        console.error('Error creating WebSocket:', error);
-        this.handleDisconnectOrFailure(reject);
-      }
+        }, CONFIG.UDP_AUTH_TIMEOUT);
+      });
     });
   }
 
@@ -219,25 +194,24 @@ export class ConnectionManager {
     if (!this.isBleSupported || !deviceId) {
       this.isSimulatedBLE = true;
       console.log('Simulating BLE connection to:', deviceName);
-      
+
       return new Promise((resolve) => {
         this.reconnectTimeout = setTimeout(() => {
           this.connectionStatus = 'authenticating';
           this.onStatusChange?.(this.connectionStatus, this.connectionType);
           this.onRssiChange?.(-65);
-          
+
           this.reconnectTimeout = setTimeout(() => {
             this.isAuthenticated = true;
             this.connectionStatus = 'connected';
             this.onStatusChange?.(this.connectionStatus, this.connectionType);
             this.startHeartbeat();
-            
-            // Poll simulated RSSI
+
             this.rssiInterval = setInterval(() => {
-              const simRssi = -65 + Math.floor(Math.random() * 9) - 4; // -61 to -69
+              const simRssi = -65 + Math.floor(Math.random() * 9) - 4;
               this.onRssiChange?.(simRssi);
             }, 2000);
-            
+
             resolve();
           }, 500);
         }, 1000);
@@ -253,10 +227,9 @@ export class ConnectionManager {
 
       this.bleDevice = await this.bleManager.connectToDevice(deviceId);
       console.log('BLE connected, discovering services...');
-      
+
       await this.bleDevice.discoverAllServicesAndCharacteristics();
-      
-      // Request larger MTU and high connection priority on Android to prevent fragmentation and latency
+
       if (Platform.OS === 'android') {
         console.log('Requesting MTU size 512 for Android...');
         await this.bleDevice.requestMTU(512).catch(err => console.warn('MTU request failed:', err));
@@ -264,8 +237,7 @@ export class ConnectionManager {
         console.log('Requesting high connection priority for Android...');
         await this.bleDevice.requestConnectionPriority(1).catch(err => console.warn('Connection priority request failed:', err));
       }
-      
-      // Setup listener on Nordic UART Service TX characteristic
+
       this.bleDevice.monitorCharacteristicForService(
         CONFIG.BLE_SERVICE_UUID,
         CONFIG.BLE_TX_UUID,
@@ -287,11 +259,9 @@ export class ConnectionManager {
       this.missedHeartbeats = 0;
       this.connectionStatus = 'authenticating';
       this.onStatusChange?.(this.connectionStatus, this.connectionType);
-      
-      // Start RSSI polling
+
       this.startRssiPolling();
 
-      // Send HB keep-alive and AUTH with a brief delay (150ms) to ensure notification subscription (CCCD write) is fully completed by the OS
       setTimeout(() => {
         if (this.connectionStatus === 'authenticating' && this.connectionType === 'ble') {
           console.log('Sending BLE HB keep-alive and AUTH message...');
@@ -314,24 +284,22 @@ export class ConnectionManager {
     this.stopHeartbeat();
     this.stopRssiPolling();
 
-    // If it's a manual disconnect, just transition to disconnected
     if (this.connectionStatus === 'disconnected') {
       rejectPromise?.(new Error('Connection closed manually'));
       return;
     }
 
-    // Attempt reconnection if under max reconnect attempts
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
-      const delay = this.reconnectDelays[this.reconnectAttempts] || 1000;
+      const delay = CONFIG.UDP_RECONNECT_DELAYS[this.reconnectAttempts] || 1000;
       console.log(`Reconnecting ${this.connectionType} in ${delay}ms (Attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`);
-      
+
       this.reconnectAttempts++;
       this.connectionStatus = 'reconnecting';
       this.onStatusChange?.(this.connectionStatus, this.connectionType);
 
       this.reconnectTimeout = setTimeout(() => {
         if (this.connectionType === 'wifi') {
-          this.connectWiFi(this.currentHost, this.currentPort, this.reconnectAttempts)
+          this.connectUDP(this.currentHost, this.currentPort, this.reconnectAttempts)
             .catch(() => {});
         } else if (this.connectionType === 'ble') {
           this.connectBLE(this.currentDeviceId, this.currentDeviceName, this.reconnectAttempts)
@@ -402,7 +370,7 @@ export class ConnectionManager {
             this.onStatusChange?.(this.connectionStatus, this.connectionType);
           }
         }
-        
+
         // Handle AUTH responses
         if (message.type === 'AUTH_STATUS' || message.type === 'AUTH') {
           const isSuccess = message.type === 'AUTH_STATUS'
@@ -411,6 +379,10 @@ export class ConnectionManager {
 
           if (isSuccess) {
             console.log('Authentication successful!');
+            if (this.authTimeout) {
+              clearTimeout(this.authTimeout);
+              this.authTimeout = null;
+            }
             this.isAuthenticated = true;
             this.connectionStatus = 'connected';
             this.onStatusChange?.(this.connectionStatus, this.connectionType);
@@ -434,7 +406,7 @@ export class ConnectionManager {
         // Reset missed heartbeats on any valid response
         this.missedHeartbeats = 0;
 
-        // Forward other messages (e.g. ACK) to callback
+        // Forward other messages to callback
         this.onMessage?.(message);
       } catch (err) {
         console.warn('JSON parse error on buffered string:', err);
@@ -445,34 +417,44 @@ export class ConnectionManager {
   // ==================== SEND MESSAGE ====================
   sendMessage(message: any): boolean {
     try {
-      const isBinary = message instanceof ArrayBuffer || ArrayBuffer.isView(message);
-      
       if (this.connectionType === 'wifi') {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-          if (isBinary) {
-            this.ws.send(message);
-          } else {
-            const data = JSON.stringify(message);
-            this.ws.send(data);
-          }
-          return true;
+        if (!this.udpSocket) return false;
+
+        const isBinary = message instanceof Uint8Array || message instanceof ArrayBuffer;
+
+        if (isBinary) {
+          const bytes = message instanceof Uint8Array
+            ? message
+            : new Uint8Array(message);
+          const buf = Buffer.from(bytes);
+          this.udpSocket.send(buf, 0, buf.length, this.currentPort, this.currentHost, (err?: Error) => {
+            if (err) console.warn('UDP send error:', err);
+          });
+        } else {
+          const data = JSON.stringify(message);
+          const buf = Buffer.from(data);
+          this.udpSocket.send(buf, 0, buf.length, this.currentPort, this.currentHost, (err?: Error) => {
+            if (err) console.warn('UDP send error:', err);
+          });
         }
-        return false;
-      } 
-      
+        return true;
+      }
+
       if (this.connectionType === 'ble') {
         if (this.isSimulatedBLE) {
           return true;
         }
-        
+
         if (this.bleDevice) {
           let base64Data: string;
+          const isBinary = message instanceof Uint8Array || message instanceof ArrayBuffer;
+
           if (isBinary) {
-            const bytes = message instanceof ArrayBuffer
-              ? new Uint8Array(message)
-              : new Uint8Array(message.buffer, message.byteOffset, message.byteLength);
+            const bytes = message instanceof Uint8Array
+              ? message
+              : new Uint8Array(message);
             base64Data = Buffer.from(bytes).toString('base64');
-            
+
             this.bleDevice.writeCharacteristicWithoutResponseForService(
               CONFIG.BLE_SERVICE_UUID,
               CONFIG.BLE_RX_UUID,
@@ -483,8 +465,7 @@ export class ConnectionManager {
           } else {
             const data = JSON.stringify(message);
             base64Data = Buffer.from(data).toString('base64');
-            
-            // For AUTH messages (which are larger than standard MTU), write with response to ensure it isn't fragmented/truncated.
+
             if (message.type === 'AUTH') {
               this.bleDevice.writeCharacteristicWithResponseForService(
                 CONFIG.BLE_SERVICE_UUID,
@@ -519,22 +500,14 @@ export class ConnectionManager {
   private startHeartbeat() {
     this.stopHeartbeat();
 
-    // Send an immediate heartbeat to keep the watchdog fresh
     if (this.connectionStatus === 'connected') {
-      const hbMsg = this.isBinaryProtocol
-        ? createBinaryHeartbeatMessage()
-        : createHeartbeatMessage();
-      this.sendMessage(hbMsg);
+      this.sendMessage(createHeartbeatMessage());
     }
 
     this.heartbeatInterval = setInterval(() => {
       if (this.connectionStatus !== 'connected') return;
 
-      const hbMsg = this.isBinaryProtocol
-        ? createBinaryHeartbeatMessage()
-        : createHeartbeatMessage();
-
-      const sent = this.sendMessage(hbMsg);
+      const sent = this.sendMessage(createHeartbeatMessage());
       if (!sent && !this.isSimulatedBLE) {
         this.missedHeartbeats++;
         if (this.missedHeartbeats >= this.maxMissedHeartbeats) {
@@ -575,35 +548,39 @@ export class ConnectionManager {
     }
   }
 
-
-
   // ==================== DISCONNECT ====================
   disconnect() {
     console.log('ConnectionManager disconnect called');
     this.stopHeartbeat();
     this.stopRssiPolling();
-    
+
+    if (this.authTimeout) {
+      clearTimeout(this.authTimeout);
+      this.authTimeout = null;
+    }
+
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
 
-    if (this.ws) {
-      // Clear handlers first to avoid onclose triggering reconnect
-      this.ws.onopen = null;
-      this.ws.onclose = null;
-      this.ws.onerror = null;
-      this.ws.onmessage = null;
-      this.ws.close();
-      this.ws = null;
+    if (this.udpSocket) {
+      try {
+        this.udpSocket.removeAllListeners?.('message');
+        this.udpSocket.removeAllListeners?.('error');
+        this.udpSocket.close();
+      } catch (e) {
+        console.warn('Error closing UDP socket:', e);
+      }
+      this.udpSocket = null;
     }
-    
+
     if (this.bleDevice) {
       const device = this.bleDevice;
       this.bleDevice = null;
       device.cancelConnection().catch(() => {});
     }
-    
+
     this.connectionType = 'none';
     this.connectionStatus = 'disconnected';
     this.isAuthenticated = false;
@@ -612,7 +589,7 @@ export class ConnectionManager {
     this.reconnectAttempts = 0;
     this.missedHeartbeats = 0;
     this.rxBuffer = '';
-    
+
     this.onStatusChange?.(this.connectionStatus, this.connectionType);
     this.onRssiChange?.(null);
   }
